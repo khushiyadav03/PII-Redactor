@@ -119,11 +119,10 @@ Output:
 Paragraphs scanned: 4686
 Tables found: 76
 Images found: 8
-Text redactions applied: 3362
-Images modified (pixel-redacted): 3
-  - word/media/image4.png: doc_type=pan confidence=high ... modified=True
-  - word/media/image5.png: doc_type=aadhaar confidence=low ... modified=True
-  - word/media/image2.jpeg: doc_type=unknown confidence=low text_boxes=1 ... modified=True
+Text redactions applied: 3519
+Images modified (pixel-redacted): 2
+  - word/media/image4.png: doc_type=pan confidence=high text_boxes=31 faces=2 id_fields=2 qr=0 modified=True
+  - word/media/image5.png: doc_type=aadhaar confidence=high text_boxes=23 faces=1 id_fields=2 qr=0 modified=True
 ```
 
 ## 15–20. Evaluation methodology, results, precision/recall/accuracy, false positives/negatives

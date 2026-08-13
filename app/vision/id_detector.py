@@ -60,9 +60,14 @@ def classify_id_document(ocr_words: List[OcrWord]) -> IdDocumentClassification:
         ("passport", matches["passport"], has_passport_number),
     ]:
         score = len(kw_list) + (1 if has_number else 0)
-        # Hinglish: Classification tabhi candidate banegi jab ID pattern mila ho ya
-        # kam se kam do distinct keyword mile hon, taaki misfires control rahein.
-        if (has_number or len(kw_list) >= 2) and score > best_score:
+        # Hinglish: Classification tabhi valid hai jab:
+        # 1. Pattern match ho AUR at least 1 context keyword ho
+        # 2. Ya fir pattern na ho par at least 2 distinct keywords hon
+        has_sufficient_evidence = (
+            (has_number and len(kw_list) >= 1) or
+            (len(kw_list) >= 2)
+        )
+        if has_sufficient_evidence and score > best_score:
             best_score = score
             best_type = doc_type
             best_keywords = kw_list
@@ -235,10 +240,10 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
 
         if doc_type == "pan":
             photo_box = (
-                card_min_x + int(card_w * 0.60),
-                card_min_y + int(card_h * 0.40),
-                card_min_x + int(card_w * 0.88),
-                card_min_y + int(card_h * 0.78)
+                card_min_x + int(card_w * 0.02),
+                card_min_y + int(card_h * 0.35),
+                card_min_x + int(card_w * 0.40),
+                card_min_y + int(card_h * 0.70)
             )
             sig_box = (
                 card_min_x + int(card_w * 0.55),

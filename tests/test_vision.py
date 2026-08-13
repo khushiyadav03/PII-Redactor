@@ -179,3 +179,116 @@ def test_qr_detection_and_masking():
     detector = cv2.QRCodeDetector()
     decoded, _, _ = detector.detectAndDecode(redacted_img)
     assert decoded == ""
+
+
+def test_normalize_and_merge_boxes():
+    from app.vision.image_redactor import normalize_and_merge_boxes
+    raw_boxes = [
+        (-10, -10, 50, 50),
+        (15, 15, 80, 80),
+        (200, 200, 250, 250),
+        (210, 210, 240, 240),
+        (500, 500, 400, 400),
+    ]
+    merged = normalize_and_merge_boxes(raw_boxes, 300, 300)
+    assert len(merged) == 2
+    assert (0, 0, 80, 80) in merged
+    assert (200, 200, 250, 250) in merged
+
+
+def test_passport_classification_and_mrz_redaction():
+    from app.vision.ocr import OcrWord
+    from app.vision.id_detector import classify_id_document, find_id_field_boxes
+    
+    words = [
+        OcrWord(text="REPUBLIC", left=50, top=50, width=50, height=15, confidence=90.0),
+        OcrWord(text="OF", left=110, top=50, width=20, height=15, confidence=90.0),
+        OcrWord(text="INDIA", left=140, top=50, width=40, height=15, confidence=90.0),
+        OcrWord(text="PASSPORT", left=50, top=100, width=80, height=15, confidence=90.0),
+        OcrWord(text="P<INDSHARMA<<RAHUL<<<<<<<<<<<<<<<<<<<<<<<<<<", left=50, top=800, width=400, height=15, confidence=90.0),
+        OcrWord(text="Z1234567<5IND9001011M2512312<<<<<<<<<<<<<<<", left=50, top=830, width=400, height=15, confidence=90.0),
+    ]
+    
+    res = classify_id_document(words)
+    assert res.doc_type == "passport"
+    
+    fields = find_id_field_boxes(words, "passport")
+    mrz_fields = [box for name, box in fields if name == "mrz"]
+    assert len(mrz_fields) == 2
+
+
+def test_pan_photo_fallback_regression():
+    from app.vision.ocr import OcrWord
+    from app.vision.id_detector import find_id_field_boxes
+    
+    words = [
+        OcrWord(text="INCOME TAX DEPARTMENT", left=50, top=50, width=200, height=20, confidence=90.0),
+        OcrWord(text="Permanent Account Number Card", left=50, top=100, width=300, height=20, confidence=90.0),
+    ]
+    
+    fields = find_id_field_boxes(words, "pan")
+    fallbacks = [box for name, box in fields if name == "fallback_photo"]
+    assert len(fallbacks) == 1
+    x1, y1, x2, y2 = fallbacks[0]
+    # Hinglish: Verify portrait is on the left side (within 45% card width offset)
+    assert x1 >= 50
+    assert x2 <= 50 + int(300 * 0.45)
+
+
+def test_id_classification_false_positives():
+    from app.vision.ocr import OcrWord
+    from app.vision.id_detector import classify_id_document
+    
+    # 1. Document containing "Aadhaar" once without Aadhaar pattern
+    words1 = [
+        OcrWord(text="Aadhaar", left=50, top=50, width=60, height=15, confidence=90.0),
+        OcrWord(text="details", left=120, top=50, width=50, height=15, confidence=90.0),
+    ]
+    assert classify_id_document(words1).doc_type == "unknown"
+    
+    # 2. Random 12-digit number without context keywords
+    words2 = [
+        OcrWord(text="1234", left=50, top=50, width=30, height=15, confidence=90.0),
+        OcrWord(text="5678", left=90, top=50, width=30, height=15, confidence=90.0),
+        OcrWord(text="9012", left=130, top=50, width=30, height=15, confidence=90.0),
+    ]
+    assert classify_id_document(words2).doc_type == "unknown"
+    
+    # 3. PAN-like pattern in financial body text
+    words3 = [
+        OcrWord(text="Account", left=50, top=50, width=50, height=15, confidence=90.0),
+        OcrWord(text="balance", left=110, top=50, width=50, height=15, confidence=90.0),
+        OcrWord(text="is", left=170, top=50, width=15, height=15, confidence=90.0),
+        OcrWord(text="NBWPS1951N", left=190, top=50, width=80, height=15, confidence=90.0),
+    ]
+    assert classify_id_document(words3).doc_type == "unknown"
+
+
+def test_generic_qr_code_not_masked():
+    _skip_if_missing(QR_IMAGE)
+    with open(QR_IMAGE, "rb") as f:
+        data = f.read()
+    policy = RedactionPolicy()
+    policy.redact_qr_on_id = True
+    
+    new_bytes, report = redact_image_bytes(data, policy, ".png")
+    assert report.doc_type == "unknown"
+    assert report.qr_codes_masked == 0
+    assert report.modified is False
+
+
+def test_signature_masking_verified():
+    from app.vision.ocr import OcrWord
+    from app.vision.id_detector import find_id_field_boxes
+    
+    words = [
+        OcrWord(text="Holder's", left=50, top=50, width=50, height=15, confidence=90.0),
+        OcrWord(text="Signature", left=110, top=50, width=60, height=15, confidence=90.0),
+        OcrWord(text="John", left=50, top=25, width=40, height=15, confidence=90.0),
+        OcrWord(text="Doe", left=100, top=25, width=40, height=15, confidence=90.0),
+    ]
+    fields = find_id_field_boxes(words, "pan")
+    sigs = [box for name, box in fields if name == "signature"]
+    assert len(sigs) == 1
+    x1, y1, x2, y2 = sigs[0]
+    assert y1 <= 25 <= y2
