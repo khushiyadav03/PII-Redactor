@@ -195,7 +195,7 @@ def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: 
                     boxes_to_mask.append(box)
                     signatures_count += 1
                 elif field_name == "fallback_photo":
-                    if policy.redact_faces:
+                    if policy.redact_id_documents:
                         boxes_to_mask.append(box)
                         photo_regions_count += 1
                 elif field_name == "fallback_signature":

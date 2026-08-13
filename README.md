@@ -39,9 +39,12 @@ The CLI calls `app.pipeline.process_document()` — a single, unified orchestrat
 
 ## 3. Supported PII types
 
-**Text:** name, email, phone, company (policy-gated — see below), address (heuristic-based multi-line grouping), SSN, credit card, date of birth (context-gated), IP address, PAN, Aadhaar (context-gated), passport (context-gated).
+The tool defines clear boundaries for each capability:
 
-**Visual:** faces, PAN/Aadhaar/passport card classification + field-level redaction (name, DOB, ID number, photo), OCR'd text-PII inside any image, QR codes on recognized ID documents. Signature redaction is a best-effort heuristic, documented as imperfect.
+* **SUPPORTED**: Full names, emails, phone numbers, company names, physical addresses, SSNs, credit card numbers, dates of birth, IP addresses, PAN, Aadhaar, and passport numbers.
+* **VALIDATED**: PAN card scans, Aadhaar card scans, and generic text-in-image/face/QR code fixtures (verified via visual ROI tests and automated image comparisons).
+* **BEST-EFFORT**: Signature masking (layout fallback, imperfect cursive boundary checks) and low-resolution/non-standard QR codes.
+* **NOT VALIDATED**: Passport real-fixture scans (due to absence of real passport sample images in fixtures), and tracked-changes / revision history removal.
 
 ## 4. Text pipeline
 
@@ -62,8 +65,8 @@ Tesseract OCR extracts words + pixel bounding boxes from every embedded image. T
 | Type | Fields redacted |
 |---|---|
 | PAN | name, father's name, DOB, PAN number, signature (best-effort), photo |
-| Aadhaar | name, DOB, Aadhaar number, photo (address/QR: see limitations) |
-| Passport | name, passport number, DOB, photo, signature (best-effort) |
+| Aadhaar | name, DOB, Aadhaar number, photo, address, QR code |
+| Passport | name, passport number, DOB, photo, signature (best-effort), MRZ |
 
 A key design choice: once an image is confidently classified as a specific ID type, the ID-number regex is applied to the **whole** OCR'd text for that image rather than requiring a nearby context keyword — because the keyword and the number are often spatially far apart on the card (e.g. "Unique Identification Authority of India" appears in a banner, the Aadhaar number appears lower down), so a local text-proximity check misses it even though the document-level classification already justifies treating that number as sensitive.
 
@@ -169,7 +172,7 @@ pii-redactor/
 │   └── evaluation/
 │       ├── metrics.py              # precision/recall/F1
 │       └── evaluator.py            # synthetic labeled test set + runner
-├── tests/                          # 63 pytest tests (unit + regression + visual ROI + API + fail-closed tests)
+├── tests/                          # 66 pytest tests (unit + regression + visual ROI + API + fail-closed tests)
 ├── samples/                        # input sample (Red_Herring_Prospectus.docx)
 ├── outputs/                        # redacted.docx goes here
 ├── reports/evaluation_report.md

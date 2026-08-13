@@ -540,3 +540,45 @@ def test_ocr_box_mapping_chain():
     assert "nbwps1951n" not in text_after
     assert "2943" not in text_after
     assert "katrauli" not in text_after
+
+
+def test_id_photo_redacted_even_if_face_redaction_disabled():
+    _skip_if_missing(AADHAAR_IMAGE)
+    with open(AADHAAR_IMAGE, "rb") as f:
+        data = f.read()
+    policy = RedactionPolicy()
+    policy.redact_id_documents = True
+    policy.redact_faces = False
+    
+    new_bytes, report = redact_image_bytes(data, policy, ".png")
+    assert report.doc_type == "aadhaar"
+    
+    arr = np.frombuffer(new_bytes, dtype=np.uint8)
+    redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    
+    # Verify that the actual portrait photo region on the LEFT side of the card is completely blacked out
+    assert np.all(redacted_img[150:350, 180:300] == 0)
+
+
+def test_generic_face_not_redacted_if_face_redaction_disabled():
+    from unittest.mock import patch
+    from app.vision.face_detector import FaceBox
+    
+    with patch("app.vision.image_redactor.detect_faces") as mock_detect_faces:
+        mock_detect_faces.return_value = [FaceBox(x=100, y=100, width=50, height=50)]
+        
+        img = np.ones((300, 300, 3), dtype=np.uint8) * 255
+        success, encoded = cv2.imencode(".png", img)
+        assert success
+        
+        policy = RedactionPolicy()
+        policy.redact_faces = False
+        policy.redact_id_documents = True
+        
+        new_bytes, report = redact_image_bytes(encoded.tobytes(), policy, ".png")
+        assert report.faces_masked == 0
+        
+        arr = np.frombuffer(new_bytes, dtype=np.uint8)
+        redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        assert not np.all(redacted_img[100:150, 100:150] == 0)
+
