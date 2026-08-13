@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import cv2
+import numpy as np
 
 from app.config import RedactionPolicy
 from app.vision.face_detector import detect_faces
@@ -230,9 +231,8 @@ def test_pan_photo_fallback_regression():
     fallbacks = [box for name, box in fields if name == "fallback_photo"]
     assert len(fallbacks) == 1
     x1, y1, x2, y2 = fallbacks[0]
-    # Hinglish: Verify portrait is on the left side (within 45% card width offset)
-    assert x1 >= 50
-    assert x2 <= 50 + int(300 * 0.45)
+    # Hinglish: Verify portrait is on the right side of the card (above 50% width offset)
+    assert x1 >= 50 + int(300 * 0.50)
 
 
 def test_id_classification_false_positives():
@@ -263,6 +263,28 @@ def test_id_classification_false_positives():
     ]
     assert classify_id_document(words3).doc_type == "unknown"
 
+    # 4. Aadhaar-like number in ordinary body text without Aadhaar keywords
+    words4 = [
+        OcrWord(text="The", left=50, top=50, width=30, height=15, confidence=90.0),
+        OcrWord(text="code", left=90, top=50, width=30, height=15, confidence=90.0),
+        OcrWord(text="2943", left=130, top=50, width=35, height=15, confidence=90.0),
+        OcrWord(text="6593", left=170, top=50, width=35, height=15, confidence=90.0),
+        OcrWord(text="3461", left=210, top=50, width=35, height=15, confidence=90.0),
+    ]
+    assert classify_id_document(words4).doc_type == "unknown"
+    
+    # 5. Singleton "Passport" keyword
+    words5 = [
+        OcrWord(text="Passport", left=50, top=50, width=60, height=15, confidence=90.0),
+    ]
+    assert classify_id_document(words5).doc_type == "unknown"
+    
+    # 6. Singleton "PAN" keyword
+    words6 = [
+        OcrWord(text="PAN", left=50, top=50, width=30, height=15, confidence=90.0),
+    ]
+    assert classify_id_document(words6).doc_type == "unknown"
+
 
 def test_generic_qr_code_not_masked():
     _skip_if_missing(QR_IMAGE)
@@ -292,3 +314,113 @@ def test_signature_masking_verified():
     assert len(sigs) == 1
     x1, y1, x2, y2 = sigs[0]
     assert y1 <= 25 <= y2
+
+
+def test_pan_photo_fallback_face_outside_expected_region():
+    from unittest.mock import patch
+    from app.vision.face_detector import FaceBox
+    
+    with patch("app.vision.image_redactor.detect_faces") as mock_detect_faces:
+        mock_detect_faces.return_value = [FaceBox(x=10, y=10, width=30, height=30)]
+        
+        # Write PAN text on canvas
+        img = np.ones((200, 600, 3), dtype=np.uint8) * 255
+        cv2.putText(img, "INCOME TAX DEPARTMENT GOVT. OF INDIA", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(img, "Permanent Account Number Card", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+        success, encoded = cv2.imencode(".png", img)
+        assert success
+        
+        policy = RedactionPolicy()
+        policy.redact_faces = True
+        
+        new_bytes, report = redact_image_bytes(encoded.tobytes(), policy, ".png")
+        assert report.doc_type == "pan"
+        
+        arr = np.frombuffer(new_bytes, dtype=np.uint8)
+        redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        # Expected fallback photo region on right side should be black (0, 0, 0)
+        assert np.all(redacted_img[90, 250] == 0)
+
+
+def test_pan_card_signature_redacted_real_fixture():
+    _skip_if_missing(PAN_IMAGE)
+    with open(PAN_IMAGE, "rb") as f:
+        data = f.read()
+    
+    policy = RedactionPolicy()
+    policy.redact_signatures_on_id = True
+    
+    new_bytes, report = redact_image_bytes(data, policy, ".png")
+    assert report.doc_type == "pan"
+    
+    arr = np.frombuffer(new_bytes, dtype=np.uint8)
+    redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    # PAN signature fallback is bottom right of front card
+    assert np.all(redacted_img[400, 500] == 0)
+
+
+def test_aadhaar_card_qr_fallback_redacted_real_fixture():
+    _skip_if_missing(AADHAAR_IMAGE)
+    with open(AADHAAR_IMAGE, "rb") as f:
+        data = f.read()
+    policy = RedactionPolicy()
+    policy.redact_qr_on_id = True
+    new_bytes, report = redact_image_bytes(data, policy, ".png")
+    assert report.doc_type == "aadhaar"
+    
+    arr = np.frombuffer(new_bytes, dtype=np.uint8)
+    redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    # Aadhaar QR code layout fallback bottom right region should be black (0, 0, 0)
+    assert np.all(redacted_img[700, 550] == 0)
+
+
+def test_generic_image_pii_redaction():
+    # 1. White canvas with clear contact info
+    img = np.ones((200, 600, 3), dtype=np.uint8) * 255
+    cv2.putText(img, "Contact: test@example.com", (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cv2.putText(img, "Phone: +91 9876543210", (50, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    
+    success, encoded = cv2.imencode(".png", img)
+    assert success
+    
+    policy = RedactionPolicy()
+    new_bytes, report = redact_image_bytes(encoded.tobytes(), policy, ".png")
+    assert report.doc_type == "unknown"
+    assert report.modified is True
+    
+    arr = np.frombuffer(new_bytes, dtype=np.uint8)
+    redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    words_after = run_ocr(redacted_img)
+    text_after = " ".join(w.text for w in words_after).lower()
+    
+    assert "test@example.com" not in text_after
+    assert "9876543210" not in text_after
+
+
+def test_ocr_box_mapping_chain():
+    img = np.ones((400, 800, 3), dtype=np.uint8) * 255
+    cv2.putText(img, "Name: Vishal Singh", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(img, "Email: test@example.com", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(img, "Phone: +91 9876543210", (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(img, "DOB: 06/06/2000", (50, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(img, "PAN: NBWPS1951N", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(img, "Aadhaar: 2943 6593 3461", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(img, "Address: Saray Katrauli, Allahabad, 212402", (50, 350), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    
+    success, encoded = cv2.imencode(".png", img)
+    assert success
+    
+    policy = RedactionPolicy()
+    new_bytes, report = redact_image_bytes(encoded.tobytes(), policy, ".png")
+    
+    arr = np.frombuffer(new_bytes, dtype=np.uint8)
+    redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    words_after = run_ocr(redacted_img)
+    text_after = " ".join(w.text for w in words_after).lower()
+    
+    assert "test@example.com" not in text_after
+    assert "9876543210" not in text_after
+    assert "nbwps1951n" not in text_after
+    assert "2943" not in text_after
+    assert "katrauli" not in text_after

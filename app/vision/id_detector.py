@@ -237,19 +237,22 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
         card_max_x, card_max_y = max(rights), max(bottoms)
         card_w = card_max_x - card_min_x
         card_h = card_max_y - card_min_y
+        
+        # Hinglish: front side height calculate karte hain double-sided stacked layout ke liye
+        front_h = card_h // 2 if card_h > 600 else card_h
 
         if doc_type == "pan":
             photo_box = (
-                card_min_x + int(card_w * 0.02),
-                card_min_y + int(card_h * 0.35),
-                card_min_x + int(card_w * 0.40),
-                card_min_y + int(card_h * 0.70)
+                card_min_x + int(card_w * 0.60),
+                card_min_y + int(front_h * 0.35),
+                card_min_x + int(card_w * 0.88),
+                card_min_y + int(front_h * 0.75)
             )
             sig_box = (
                 card_min_x + int(card_w * 0.55),
-                card_min_y + int(card_h * 0.70),
+                card_min_y + int(front_h * 0.70),
                 card_min_x + int(card_w * 0.90),
-                card_min_y + int(card_h * 0.90)
+                card_min_y + int(front_h * 0.92)
             )
             boxes.append(("fallback_photo", photo_box))
             boxes.append(("fallback_signature", sig_box))
@@ -257,27 +260,36 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
         elif doc_type == "aadhaar":
             has_address = any("address" in w.text.lower() or "पता" in w.text.lower() for w in words)
             if not has_address:
-                # Aadhaar front-page photo is on the left or right, let's fallback to the right/left
                 photo_box = (
                     card_min_x + int(card_w * 0.05),
-                    card_min_y + int(card_h * 0.25),
+                    card_min_y + int(front_h * 0.25),
                     card_min_x + int(card_w * 0.40),
-                    card_min_y + int(card_h * 0.80)
+                    card_min_y + int(front_h * 0.80)
                 )
                 boxes.append(("fallback_photo", photo_box))
+            
+            # Hinglish: Aadhaar back-page QR code layout-fallback agar double-sided layout active ho
+            if card_h > 600:
+                qr_box = (
+                    card_min_x + int(card_w * 0.55),
+                    card_min_y + int(front_h * 1.15),
+                    card_min_x + int(card_w * 0.90),
+                    card_min_y + int(front_h * 1.85)
+                )
+                boxes.append(("fallback_qr", qr_box))
                 
         elif doc_type == "passport":
             photo_box = (
                 card_min_x + int(card_w * 0.02),
-                card_min_y + int(card_h * 0.20),
+                card_min_y + int(front_h * 0.20),
                 card_min_x + int(card_w * 0.45),
-                card_min_y + int(card_h * 0.80)
+                card_min_y + int(front_h * 0.80)
             )
             sig_box = (
                 card_min_x + int(card_w * 0.45),
-                card_min_y + int(card_h * 0.65),
+                card_min_y + int(front_h * 0.65),
                 card_min_x + int(card_w * 0.85),
-                card_min_y + int(card_h * 0.90)
+                card_min_y + int(front_h * 0.90)
             )
             boxes.append(("fallback_photo", photo_box))
             boxes.append(("fallback_signature", sig_box))

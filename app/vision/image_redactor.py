@@ -189,7 +189,12 @@ def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: 
                         continue
                     boxes_to_mask.append(box)
                 elif field_name == "fallback_photo":
-                    if len(faces) == 0 and policy.redact_faces:
+                    has_overlapping_face = False
+                    for f in faces:
+                        if _rect_intersect(f.box, box) is not None:
+                            has_overlapping_face = True
+                            break
+                    if not has_overlapping_face and policy.redact_faces:
                         boxes_to_mask.append(box)
                 elif field_name == "fallback_signature":
                     if not has_signature_label and policy.redact_signatures_on_id:

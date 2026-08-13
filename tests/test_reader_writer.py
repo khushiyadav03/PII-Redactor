@@ -59,3 +59,34 @@ def test_load_document_on_real_prospectus_does_not_crash():
     assert len(content.body_paragraphs) > 0
     assert len(content.table_paragraphs) > 0
     assert len(content.document.tables) == 76
+
+
+def test_metadata_cleanup_on_save_and_reload(tmp_path):
+    import docx
+    from app.document.metadata import clean_core_metadata
+    
+    doc_path = tmp_path / "test_meta.docx"
+    doc = docx.Document()
+    doc.add_paragraph("Hello world.")
+    
+    props = doc.core_properties
+    props.author = "John Doe"
+    props.last_modified_by = "Jane Doe"
+    props.title = "Confidential Report"
+    props.comments = "This is a comment."
+    props.category = "Internal"
+    
+    doc.save(doc_path)
+    
+    doc2 = docx.Document(doc_path)
+    assert doc2.core_properties.author == "John Doe"
+    
+    clean_core_metadata(doc2)
+    doc2.save(doc_path)
+    
+    doc3 = docx.Document(doc_path)
+    assert doc3.core_properties.author == ""
+    assert doc3.core_properties.last_modified_by == ""
+    assert doc3.core_properties.title == ""
+    assert doc3.core_properties.comments == ""
+    assert doc3.core_properties.category == ""
