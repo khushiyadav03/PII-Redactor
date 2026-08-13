@@ -647,9 +647,12 @@
             const formData = new FormData();
             formData.append('file', selectedFile);
 
+            // Hinglish: Production backend URL yahan update karte hain — purana Render URL
+            // replace kiya gaya hai naye deployed backend se. Localhost par relative path use
+            // hota hai (co-located FastAPI), production par absolute Render URL.
             const backendBase = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
                 ? ''
-                : 'https://pii-redactor-backend.onrender.com';
+                : 'https://pii-redactor-42zi.onrender.com';
 
             try {
                 const response = await fetch(backendBase + '/redact', {
