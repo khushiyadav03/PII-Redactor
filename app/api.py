@@ -10,7 +10,7 @@ import shutil
 import tempfile
 import logging
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -29,6 +29,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Text-Redactions-Applied", "X-Images-Redacted", "X-Paragraphs-Scanned", "X-Tables-Found", "X-Images-Found"],
 )
 
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
@@ -62,7 +63,26 @@ def get_frontend():
 
 
 @app.post("/redact")
-async def redact_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def redact_file(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    redact_names: bool = Form(True),
+    redact_emails: bool = Form(True),
+    redact_phones: bool = Form(True),
+    redact_companies: bool = Form(True),
+    redact_addresses: bool = Form(True),
+    redact_ssn: bool = Form(True),
+    redact_credit_card: bool = Form(True),
+    redact_dob: bool = Form(True),
+    redact_ip: bool = Form(True),
+    redact_pan: bool = Form(True),
+    redact_aadhaar: bool = Form(True),
+    redact_passport: bool = Form(True),
+    redact_faces: bool = Form(True),
+    redact_id_documents: bool = Form(True),
+    redact_qr_on_id: bool = Form(True),
+    redact_signatures_on_id: bool = Form(True),
+):
     """
     Hinglish: Multi-part upload endpoint (DOCX validation + processing + cleanup).
     Constraints: reject empty/oversized/non-docx files, ensure fail-closed image errors,
@@ -95,7 +115,25 @@ async def redact_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
         # Process the document
         try:
-            process_document(temp_in_path, temp_out_path)
+            policy = RedactionPolicy(
+                redact_names=redact_names,
+                redact_emails=redact_emails,
+                redact_phones=redact_phones,
+                redact_companies=redact_companies,
+                redact_addresses=redact_addresses,
+                redact_ssn=redact_ssn,
+                redact_credit_card=redact_credit_card,
+                redact_dob=redact_dob,
+                redact_ip=redact_ip,
+                redact_pan=redact_pan,
+                redact_aadhaar=redact_aadhaar,
+                redact_passport=redact_passport,
+                redact_faces=redact_faces,
+                redact_id_documents=redact_id_documents,
+                redact_qr_on_id=redact_qr_on_id,
+                redact_signatures_on_id=redact_signatures_on_id,
+            )
+            result = process_document(temp_in_path, temp_out_path, policy)
         except ValueError as val_err:
             # Hinglish: Malformed DOCX files ya unprocessable images par clear error
             err_msg = str(val_err)
@@ -115,10 +153,19 @@ async def redact_file(background_tasks: BackgroundTasks, file: UploadFile = File
         background_tasks.add_task(cleanup_file, temp_out_path)
 
         safe_out_name = f"redacted_{Path(filename).name}"
+        headers = {
+            "Access-Control-Expose-Headers": "X-Text-Redactions-Applied, X-Images-Redacted, X-Paragraphs-Scanned, X-Tables-Found, X-Images-Found",
+            "X-Text-Redactions-Applied": str(result.text_redactions_applied),
+            "X-Images-Redacted": str(result.images_modified),
+            "X-Paragraphs-Scanned": str(result.paragraphs_scanned),
+            "X-Tables-Found": str(result.tables_found),
+            "X-Images-Found": str(result.images_found),
+        }
         return FileResponse(
             temp_out_path,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            filename=safe_out_name
+            filename=safe_out_name,
+            headers=headers
         )
 
     except HTTPException:
