@@ -94,5 +94,103 @@ def test_address_detected():
 
 
 def test_pin_code_detected_as_address():
-    cats = categories("Send mail to PIN Code 110001 today.")
+    # Hinglish: PIN code with address label or location context should be matched
+    cats = categories("Send mail to registered office at PIN Code 110001 today.")
     assert any(c == "address" and "110001" in val for c, val in cats)
+
+
+# --- Phase 1: Robust Address Detection Tests ---
+
+def test_address_single_line():
+    cats = categories("Registered Office at Plot 45, Residency Road, Pune 411001, India.")
+    assert any(c == "address" for c, _ in cats)
+
+
+def test_address_multi_line():
+    cats = categories("Registered Office:\n11/3 Mueller Road,\nPune - 411045,\nMaharashtra, India")
+    # Grouped as one single address block
+    assert len([val for c, val in cats if c == "address"]) == 1
+    assert "Mueller Road" in [val for c, val in cats if c == "address"][0]
+
+
+def test_address_with_apartment():
+    cats = categories("Mailing Address: Flat No 302, Wing B, Green Glen Layout, Bangalore - 560103")
+    assert any(c == "address" for c, _ in cats)
+
+
+def test_address_without_pin():
+    # Hinglish: Address without PIN should still be detected if it has strong location + street + label signals
+    cats = categories("Registered Office: Mueller Road, Pune, Maharashtra, India")
+    assert any(c == "address" for c, _ in cats)
+
+
+def test_address_containing_company_and_person_name():
+    # Hinglish: Names/Companies inside the address block should be absorbed
+    cats = categories("Corporate Office:\nScaler AI Labs Private Limited,\nc/o Rahul Sharma, Plot No 12, Sector 14,\nGurgaon - 122001")
+    address_vals = [val for c, val in cats if c == "address"]
+    assert len(address_vals) == 1
+    assert "Scaler AI" in address_vals[0]
+    assert "Rahul Sharma" in address_vals[0]
+
+
+def test_address_false_positives_standalone():
+    # Hinglish: Standalone geographic names or numeric IDs must NOT be redacted as address
+    assert not any(c == "address" for c, _ in categories("He lives in Pune."))
+    assert not any(c == "address" for c, _ in categories("Maharashtra is a state."))
+    assert not any(c == "address" for c, _ in categories("The code is 411045."))
+    assert not any(c == "address" for c, _ in categories("Refer to Page 41 of the documentation."))
+    assert not any(c == "address" for c, _ in categories("The invoice amount was ₹4,11,045 only."))
+    assert not any(c == "address" for c, _ in categories("Order No. 411045 has been processed."))
+    assert not any(c == "address" for c, _ in categories("The date is 10/12/2025."))
+
+
+# --- Phase 1: Robust Name Detection Tests ---
+
+def test_name_slashed_promoters_list():
+    cats = categories("Promoters:\nRahul Sharma / Priya Gupta / Amit Kumar")
+    names = [val for c, val in cats if c == "name"]
+    assert "Rahul Sharma" in names
+    assert "Priya Gupta" in names
+    assert "Amit Kumar" in names
+
+
+def test_name_next_line_layout():
+    cats = categories("Managing Director:\nRahul Sharma")
+    assert ("name", "Rahul Sharma") in cats
+
+
+def test_name_same_line_layout():
+    cats = categories("Father's Name: Sugriv Singh")
+    assert ("name", "Sugriv Singh") in cats
+
+
+def test_name_allowlist_protection():
+    # Hinglish: Regulatory names or month names should not trigger name redactions
+    cats = categories("In January 2026, the board of SEBI and NSE reviewed the RHP of the company.")
+    assert not any(c == "name" for c, _ in cats)
+
+
+# --- Phase 1: Robust Phone Number Tests ---
+
+def test_phone_formats():
+    phone_examples = [
+        "9876543210",
+        "98765 43210",
+        "+91 9876543210",
+        "+91-9876543210",
+        "+91 98765 43210",
+        "81081 14949",
+        "022-68052182",
+        "+91 22 6805 2182"
+    ]
+    for ph in phone_examples:
+        cats = categories(f"You can contact us at {ph} for help.")
+        assert any(c == "phone" for c, _ in cats), f"Phone format failed: {ph}"
+
+
+def test_phone_false_positives():
+    # Hinglish: Generic big numbers or share numbers shouldn't be phone PII
+    assert not any(c == "phone" for c, _ in categories("We issued 123456789012 shares."))
+    assert not any(c == "phone" for c, _ in categories("The page number is 243."))
+    assert not any(c == "phone" for c, _ in categories("The total cost is INR 98,76,54,321."))
+

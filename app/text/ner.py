@@ -43,7 +43,7 @@ def extract_entities(texts):
         ents = [
             (ent.start_char, ent.end_char, ent.text, ent.label_)
             for ent in doc.ents
-            if ent.label_ in ("PERSON", "ORG")
+            if ent.label_ in ("PERSON", "ORG", "GPE", "LOC", "FAC")
         ]
         results.append(ents)
     return results

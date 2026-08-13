@@ -18,7 +18,13 @@ EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 # ya landline with STD code jaise "+ 91 20 4505 3237". Spaces/hyphens allow
 # karte hain kyunki prospectus mein "+ 91 20 4505 3237" style common hai.
 PHONE_RE = re.compile(
+    # 1. Indian Mobile: starts with +91, 91, or 0 (optional), then digits 6-9, then 9 more digits (with optional spaces/hyphens)
     r"(?<!\d)(?:\+?\s?91[\s-]?)?[6-9]\d{2}[\s-]?\d{3}[\s-]?\d{4}(?!\d)"
+    r"|(?<!\d)(?:\+?\s?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}(?!\d)"  # 5+5 format e.g. 98765 43210 or 81081 14949
+    # 2. Indian Landline: starts with 0 or +91, followed by area code (2-3 digits), then landline number (6-8 digits)
+    r"|(?<!\d)(?:0\d{2,3}|(?:\+?\s?91[\s-]?)?\b\d{2,3})[\s-]?\d{3,4}[\s-]?\d{3,4}(?!\d)"
+    r"|(?<!\d)0\d{2,3}[\s-]?\d{6,8}(?!\d)"
+    # 3. Generic international with + prefix
     r"|(?<!\d)\+\s?\d{1,3}[\s-]?\d{1,4}[\s-]?\d{3,4}[\s-]?\d{3,4}(?!\d)"
 )
 
