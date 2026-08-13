@@ -47,21 +47,30 @@ class ImageRedactionReport:
 
 def _build_ocr_logical_text(words: List[OcrWord]) -> Tuple[str, List[Tuple[int, int, OcrWord]]]:
     """
-    Hinglish: reader.py ke run-mapping concept jaisa hi idea - OCR words
-    ko ek single text mein jodte hain, aur har word ka (start,end) offset
-    record karte hain taaki baad mein detected PII span ko wapas specific
-    word-boxes par map kar sakein.
+    Hinglish: Line boundaries preserve karte hue logical text build karte hain,
+    taaki multi-line address detector individual lines ko separate analyze kar sake.
     """
+    from app.vision.id_detector import _group_words_into_lines
+    lines = _group_words_into_lines(words)
+    
     parts = []
     spans = []
     cursor = 0
-    for w in words:
-        start = cursor
-        end = cursor + len(w.text)
-        spans.append((start, end, w))
-        parts.append(w.text)
-        cursor = end + 1  # +1 for the joining space
-    return " ".join(parts), spans
+    
+    for i, line in enumerate(lines):
+        for j, w in enumerate(line):
+            start = cursor
+            end = cursor + len(w.text)
+            spans.append((start, end, w))
+            parts.append(w.text)
+            cursor = end + 1
+            if j < len(line) - 1:
+                parts.append(" ")
+            else:
+                if i < len(lines) - 1:
+                    parts.append("\n")
+                    
+    return "".join(parts), spans
 
 
 def _boxes_overlapping_span(spans, start, end) -> List[Tuple[int, int, int, int]]:
@@ -70,6 +79,59 @@ def _boxes_overlapping_span(spans, start, end) -> List[Tuple[int, int, int, int]
         if s_end > start and s_start < end:
             boxes.append(word.box)
     return boxes
+
+
+def _rect_intersect(r1, r2):
+    x1 = max(r1[0], r2[0])
+    y1 = max(r1[1], r2[1])
+    x2 = min(r1[2], r2[2])
+    y2 = min(r1[3], r2[3])
+    if x2 > x1 and y2 > y1:
+        return (x1, y1, x2, y2)
+    return None
+
+
+def _rect_area(r):
+    return (r[2] - r[0]) * (r[3] - r[1])
+
+
+def normalize_and_merge_boxes(boxes: List[Tuple[int, int, int, int]], width: int, height: int) -> List[Tuple[int, int, int, int]]:
+    """
+    Hinglish: overlapping aur invalid boxes filter aur merge karta hai target coordinates par.
+    """
+    # 1. Clip and validate
+    clipped = []
+    for (x1, y1, x2, y2) in boxes:
+        x1 = max(0, min(x1, width))
+        y1 = max(0, min(y1, height))
+        x2 = max(0, min(x2, width))
+        y2 = max(0, min(y2, height))
+        if x2 > x1 and y2 > y1:
+            clipped.append((x1, y1, x2, y2))
+            
+    # 2. Merge overlapping boxes
+    merged = []
+    while clipped:
+        curr = clipped.pop(0)
+        has_merged = False
+        for i, other in enumerate(merged):
+            inter = _rect_intersect(curr, other)
+            if inter:
+                inter_area = _rect_area(inter)
+                min_area = min(_rect_area(curr), _rect_area(other))
+                if min_area > 0 and (inter_area / min_area) > 0.4:
+                    merged[i] = (
+                        min(curr[0], other[0]),
+                        min(curr[1], other[1]),
+                        max(curr[2], other[2]),
+                        max(curr[3], other[3])
+                    )
+                    has_merged = True
+                    break
+        if not has_merged:
+            merged.append(curr)
+            
+    return merged
 
 
 def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: str = ".png") -> Tuple[bytes, ImageRedactionReport]:
@@ -172,12 +234,11 @@ def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: 
         # Hinglish: kuch bhi redact-worthy nahi mila, original bytes hi return karo
         return image_bytes, report
 
-    # ---- Step 7: actual pixel modification (irreversible) ----
-    for (x1, y1, x2, y2) in boxes_to_mask:
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(image.shape[1], x2), min(image.shape[0], y2)
-        if x2 > x1 and y2 > y1:
-            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 0), thickness=-1)
+    # ---- Step 7: actual pixel modification (normalized and merged) ----
+    h, w = image.shape[:2]
+    normalized_boxes = normalize_and_merge_boxes(boxes_to_mask, w, h)
+    for (x1, y1, x2, y2) in normalized_boxes:
+        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 0), thickness=-1)
 
     report.modified = True
 

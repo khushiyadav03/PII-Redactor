@@ -18,12 +18,21 @@ import numpy as np
 import pytesseract
 import os
 
-# Hinglish: Windows environment par Tesseract default path check karte hain,
-# taaki agar user ne standard location par install kiya ho to path configure
-# automatically ho jaye (TesseractNotFoundError se bachne ke liye).
-_DEFAULT_TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-if os.name == "nt" and os.path.exists(_DEFAULT_TESSERACT_PATH):
-    pytesseract.pytesseract.tesseract_cmd = _DEFAULT_TESSERACT_PATH
+# Hinglish: Tesseract auto-configuration block.
+# Sabse pehle system PATH check karte hain, aur agar nahi milta to standard
+# Windows location. Isse environment configurations automatic run hoti hain.
+try:
+    pytesseract.get_tesseract_version()
+except pytesseract.TesseractNotFoundError:
+    _COMMON_PATHS = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe")
+    ]
+    for path in _COMMON_PATHS:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            break
 
 from app.config import OCR_MIN_CONFIDENCE
 
@@ -79,7 +88,13 @@ def run_ocr(image_bgr: np.ndarray, preprocess: bool = True) -> List[OcrWord]:
         processed = image_bgr
         scale_x = scale_y = 1.0
 
-    data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT)
+    try:
+        data = pytesseract.image_to_data(processed, output_type=pytesseract.Output.DICT)
+    except pytesseract.TesseractNotFoundError as exc:
+        raise RuntimeError(
+            "Tesseract OCR is not installed or not configured on this machine. "
+            "Please install Tesseract-OCR and ensure it is available in your PATH."
+        ) from exc
 
     words = []
     n = len(data["text"])

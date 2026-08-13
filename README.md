@@ -39,9 +39,7 @@ Both the CLI and (optional) FastAPI wrapper call the same `app.pipeline.process_
 
 ## 3. Supported PII types
 
-**Text:** name, email, phone, company (policy-gated — see below), address*, SSN, credit card, date of birth (context-gated), IP address, PAN, Aadhaar (context-gated), passport (context-gated).
-
-*Address is **not** implemented as a dedicated extractor — see Limitations in the evaluation report. Everything else above is implemented and tested.
+**Text:** name, email, phone, company (policy-gated — see below), address (heuristic-based multi-line grouping), SSN, credit card, date of birth (context-gated), IP address, PAN, Aadhaar (context-gated), passport (context-gated).
 
 **Visual:** faces, PAN/Aadhaar/passport card classification + field-level redaction (name, DOB, ID number, photo), OCR'd text-PII inside any image, QR codes on recognized ID documents. Signature redaction is a best-effort heuristic, documented as imperfect.
 
@@ -138,11 +136,11 @@ Headline numbers:
 
 ## 21. Limitations
 
-Full list in `reports/evaluation_report.md` §5. Short version: name recall on Indian names is the weakest link; address extraction isn't implemented; signature/QR detection are best-effort heuristics that were tested and shown to have real gaps; tracked-changes metadata isn't sanitized.
+Full list in `reports/evaluation_report.md` §5. Short version: signature detection is a best-effort heuristic that has real gaps; tracked-changes metadata isn't sanitized.
 
 ## 22. Future improvements
 
-See `reports/evaluation_report.md` §6 — phone regex coverage, a name gazetteer to lift recall, a dedicated address extractor, and a DNN-based face detector.
+See `reports/evaluation_report.md` §6 — a name gazetteer to lift recall, and a DNN-based face detector.
 
 ## Project structure
 

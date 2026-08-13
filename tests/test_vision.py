@@ -76,10 +76,6 @@ def test_aadhaar_card_classified_and_number_masked():
     _skip_if_missing(AADHAAR_IMAGE)
     with open(AADHAAR_IMAGE, "rb") as f:
         data = f.read()
-    # Configure tesseract cmd just in case
-    import app.vision.ocr as ocr_mod
-    ocr_mod.pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    
     new_bytes, report = redact_image_bytes(data, RedactionPolicy(), ".png")
     assert report.doc_type == "aadhaar"
     assert report.modified is True
@@ -132,3 +128,54 @@ def test_find_id_field_boxes_photo_fallbacks():
     boxes = find_id_field_boxes(words, "pan")
     fallback_photos = [box for name, box in boxes if name == "fallback_photo"]
     assert len(fallback_photos) == 1
+
+
+# --- Phase 2: Visual Hardening and QR Validation Tests ---
+
+QR_IMAGE = os.path.join(SAMPLES_DIR, "qr_code_sample.png")
+
+def test_id_classification_negative_singleton():
+    # Hinglish: Ek sentence jisme single keyword ho wo ID document classify nahi hona chahiye
+    from app.vision.ocr import OcrWord
+    words = [
+        OcrWord(text="This", left=10, top=10, width=30, height=15, confidence=90.0),
+        # "passport" keyword present only once, no passport pattern
+        OcrWord(text="passport", left=50, top=10, width=50, height=15, confidence=90.0),
+        OcrWord(text="guidelines", left=110, top=10, width=60, height=15, confidence=90.0),
+    ]
+    result = classify_id_document(words)
+    assert result.doc_type == "unknown"
+
+
+def test_qr_detection_and_masking():
+    import numpy as np
+    _skip_if_missing(QR_IMAGE)
+    
+    # 1. Base QR check
+    img = cv2.imread(QR_IMAGE)
+    qrs = detect_qr_codes(img)
+    assert len(qrs) == 1
+    
+    # 2. Aadhaar text add kar ke composite image banate hain taaki visual pipeline confidently classify aur redact kare
+    h, w = img.shape[:2]
+    canvas = np.ones((h + 100, w, 3), dtype=np.uint8) * 255
+    canvas[0:h, 0:w] = img
+    cv2.putText(canvas, "Unique Identification Authority of India", (10, h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    cv2.putText(canvas, "Aadhaar Number: 2943 6593 3461", (10, h + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    
+    success, encoded = cv2.imencode(".png", canvas)
+    assert success
+    
+    policy = RedactionPolicy()
+    policy.redact_qr_on_id = True
+    
+    redacted_bytes, report = redact_image_bytes(encoded.tobytes(), policy, ".png")
+    assert report.doc_type == "aadhaar"
+    assert report.qr_codes_masked >= 1
+    
+    # 3. Redacted image mein QR decodable nahi hona chahiye
+    arr = np.frombuffer(redacted_bytes, dtype=np.uint8)
+    redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    detector = cv2.QRCodeDetector()
+    decoded, _, _ = detector.detectAndDecode(redacted_img)
+    assert decoded == ""

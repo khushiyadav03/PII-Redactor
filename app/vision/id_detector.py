@@ -60,15 +60,23 @@ def classify_id_document(ocr_words: List[OcrWord]) -> IdDocumentClassification:
         ("passport", matches["passport"], has_passport_number),
     ]:
         score = len(kw_list) + (1 if has_number else 0)
-        if score > best_score:
+        # Hinglish: Classification tabhi candidate banegi jab ID pattern mila ho ya
+        # kam se kam do distinct keyword mile hon, taaki misfires control rahein.
+        if (has_number or len(kw_list) >= 2) and score > best_score:
             best_score = score
             best_type = doc_type
             best_keywords = kw_list
 
-    if best_score == 0:
+    if best_type == "unknown":
         return IdDocumentClassification(doc_type="unknown", confidence="low", matched_keywords=[])
 
-    confidence = "high" if best_score >= 2 else "low"
+    # Hinglish: High confidence tabhi jab dono factors (keywords aur patterns) satisfied hon.
+    has_number_matched = (
+        (best_type == "pan" and has_pan_number) or
+        (best_type == "aadhaar" and has_aadhaar_number) or
+        (best_type == "passport" and has_passport_number)
+    )
+    confidence = "high" if (len(best_keywords) >= 1 and has_number_matched) else "low"
     return IdDocumentClassification(doc_type=best_type, confidence=confidence, matched_keywords=best_keywords)
 
 
@@ -186,13 +194,22 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
         if doc_type == "aadhaar":
             is_address_label = any(t in ("address", "address:", "addressl", "addre", "पता", "पता:") for t in line_words_lower)
             if is_address_label:
-                y_start = line[0].top
-                lefts = [w.left for w in words]
-                rights = [w.left + w.width for w in words]
-                min_x = min(lefts) if lefts else 0
-                max_x = max(rights) if rights else 900
-                # Mask the horizontal band of the address (about 130px height)
-                boxes.append(("address", (min_x, y_start - 10, max_x, y_start + 120)))
+                # Label word find karte hain coordinate mapping ke liye
+                label_word = None
+                for w in line:
+                    if w.text.strip(":").lower() in ("address", "address:", "addressl", "addre", "पता", "पता:"):
+                        label_word = w
+                        break
+                if label_word:
+                    # Sirf address region ke physical words collect karte hain over-masking se bachne ke liye
+                    address_words = []
+                    for w in words:
+                        if (w.top >= label_word.top - 15 and
+                            w.top <= label_word.top + 130 and
+                            w.left >= label_word.left - 30):
+                            address_words.append(w)
+                    if address_words:
+                        boxes.append(("address", _line_bbox(address_words)))
 
         # Hinglish: Passport MRZ (Machine Readable Zone) lines detection
         if doc_type == "passport":

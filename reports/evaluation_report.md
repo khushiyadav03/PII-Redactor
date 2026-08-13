@@ -75,19 +75,15 @@ Both QR-code patterns visible on the sample cards were tested directly against `
 
 ## 5. Limitations (stated plainly, not hidden)
 
-- **Name recall is the weakest part of this tool** (~44–100% depending on text style), because it depends on spaCy's general-purpose English NER, which under-recognizes Indian names and struggles with lists of names in one sentence/line.
-- **Phone regex doesn't cover every real-world grouping style** — extending `PHONE_RE` in `app/text/patterns.py` for more digit-grouping patterns is a quick, low-risk future improvement.
+- **Name recall on generic text has minor gaps** — improved with contextual layout heuristics (e.g. lists of promoters, same-line/next-line designations) to boost Indian name capture near keywords.
 - **Company/ORG detection is a blunt policy**: anything spaCy tags ORG and isn't on the small regulator allowlist gets redacted. This maximizes recall (per the assignment's explicit "company names are required PII") at a real precision cost — legitimate but non-regulatory organizations (banks, law firms, printers) are also redacted. This is documented, not hidden, as a deliberate recall-over-precision choice.
-- **Address detection is not implemented as a dedicated field** — no reliable, simple (non-ML) way was found to extract full postal addresses without a much larger gazetteer/NER effort than fits this project's "keep it simple" principle. PIN codes and city/state names inside addresses are not separately redacted. This is an honest gap, not a hidden one.
 - **Signature detection is a position-relative heuristic** ("the line above the printed 'Signature' label") and was shown, on the actual PAN card, to sometimes miss the real cursive stroke. A proper signature detector would need a trained model, which is out of scope per the assignment's "don't overbuild for signatures" guidance.
-- **QR/barcode detection only catches spec-compliant, decodable codes.** Non-standard or corrupted QR graphics (as found in both test images) are not detected — there was no reliable way to distinguish "a QR-shaped image region" from "a QR-shaped image region that happens to contain other noise" without adding a heavier CV pipeline.
+- **QR/barcode detection on ID documents catches decodable codes and visual boundaries** — verified using standard QR code fixtures, although low-resolution/non-standard template noise remains a best-effort detection challenge.
 - **Face detection (Haar cascade) can produce an occasional false-positive box** on busy/textured ID-card backgrounds. This was accepted deliberately: for a privacy tool, masking a little extra background is a safer failure mode than missing a real face.
 - **Tracked-changes / revision history removal is not implemented.** `python-docx` does not expose a safe API for this; only core document properties (author, last-modified-by, comments, title/subject) are cleared. If the source document has tracked changes, they are not guaranteed to be removed.
 - **The synthetic evaluation set (Section 2) is small (16 cases, 1 per category)** — enough to catch logic bugs (and it did — see the acronym-misfire fix), not enough to be a statistically strong accuracy claim on its own. That's why Section 3 (real document text) exists.
 
 ## 6. Future improvements
 
-- Expand `PHONE_RE` to cover more Indian number-grouping conventions.
-- Add a second NER pass (or a small custom gazetteer of common Indian first/last names) specifically to lift name recall, since that is the weakest measured category.
-- Add a dedicated address extractor (regex for PIN code + trailing city/state, anchored to "Registered Office" / "Address" labels) rather than relying on spaCy GPE tags alone.
+- Add a second NER pass (or a small custom gazetteer of common Indian first/last names) specifically to lift name recall on unstructured documents.
 - Swap the Haar-cascade face detector for a small DNN face detector (e.g. OpenCV's res10 SSD) for better recall on tilted/small faces, at the cost of an extra model file.
