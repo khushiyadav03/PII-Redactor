@@ -129,9 +129,12 @@ def _stream_redaction(temp_in_path: str, temp_out_path: str, policy: RedactionPo
     cleanup_file(temp_out_path)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
-    """Hinglish: Simple health check status API (bina kisi secret/PII info leaks ke)."""
+    """Hinglish: Simple health check status API (bina kisi secret/PII info leaks ke).
+    # UptimeRobot jaisi monitoring services kabhi kabhi HEAD request bhejti hain,
+    # isliye GET ke saath HEAD bhi explicitly support karte hain — 405 error avoid karne ke liye.
+    """
     return {"status": "ok"}
 
 
