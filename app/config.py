@@ -1,5 +1,5 @@
 """
-Hinglish: Ye file poore project ki configuration rakhti hai - PII types on/off,
+Ye file poore project ki configuration rakhti hai - PII types on/off,
 company-name policy, confidence thresholds, file paths, etc.
 Ek jagah se sab settings control karne ke liye taaki har module mein
 hard-coded values scatter na ho.
@@ -11,7 +11,7 @@ from pathlib import Path
 @dataclass
 class RedactionPolicy:
     """
-    Hinglish: Ye class decide karti hai ki kaun se PII category ko redact
+    Ye class decide karti hai ki kaun se PII category ko redact
     karna hai. Assignment ke minimum required types by default True hain.
     Extra (PAN/Aadhaar/passport) bhi True hain kyunki user ne explicitly
     manga hai extended requirement mein.
@@ -36,7 +36,7 @@ class RedactionPolicy:
     redact_signatures_on_id: bool = True
 
 
-# Hinglish: Company-name redaction sabse risky hai kyunki prospectus mein
+# Company-name redaction sabse risky hai kyunki prospectus mein
 # bahut saari legitimate/regulatory organizations ka naam aata hai
 # (SEBI, NSE, BSE, RBI, banks, law firms, auditors, stock exchanges).
 # Agar hum har ORG entity ko blindly redact karenge to precision bahut gir
@@ -51,8 +51,12 @@ COMPANY_ALLOWLIST_KEYWORDS = [
     "registrar of companies", "roc", "ministry of corporate affairs",
     "income tax department", "uidai", "unique identification authority",
     "government of india", "govt. of india", "companies act",
-    "sebi icdr regulations", "depositories act", "nsdl", "cdsl",
+    "sebi icdr regulations", "icdr regulations", "depositories act", "nsdl", "cdsl",
     "irdai", "competition commission of india", "cci",
+    # Hinglish: Regulatory/legal "Regulations" phrases jo spaCy ORG tag kar deta hai —
+    # ye company names nahi hain, isliye allowlist mein add kiye.
+    "icdr", "regulations", "act,", "act ", "rules,", "rules ", "guidelines",
+    "circular", "notification", "gazette", "schedule", "annexure",
 ]
 
 # Hinglish: Ye words dates/numbers ke aas paas mile to confidence badhti hai
@@ -68,14 +72,14 @@ AADHAAR_CONTEXT_KEYWORDS = ["aadhaar", "aadhar", "unique identification authorit
 
 PASSPORT_CONTEXT_KEYWORDS = ["passport", "republic of india", "type p"]
 
-# Hinglish: Non-PII numeric patterns jo galti se PII detect ho sakte hain -
+# Non-PII numeric patterns jo galti se PII detect ho sakte hain -
 # in false positives se bachne ke liye negative-context words.
 NON_PII_NUMBER_CONTEXT = [
     "invoice", "order no", "order number", "cin", "corporate identity number",
     "isin", "folio", "page", "clause", "section", "regulation",
 ]
 
-# Hinglish: LIMITATION FIX - spaCy ka en_core_web_sm model chhote/isolated
+# LIMITATION FIX - spaCy ka en_core_web_sm model chhote/isolated
 # sentences mein common PII-related ACRONYMS (jaise "PAN", "SSN", "KYC")
 # ko galti se ORG (company) tag kar deta hai, kyunki ye all-caps tokens
 # hain aur model ko surrounding paragraph context nahi milta jitna training
@@ -88,16 +92,20 @@ NON_COMPANY_ACRONYMS = {
     "nsdl", "cdsl", "roc", "sebi", "rbi", "irdai", "upi", "ipo", "rhp",
     "ecs", "neft", "rtgs", "kpi", "faq", "otp", "pin", "cvv",
     "aadhaar", "aadhar",  # Hinglish: proper noun, spaCy sm often mistags as ORG
+    # Hinglish: Regulatory document terms jo spaCy multi-word ORG spans mein
+    # include kar leta hai — ye legislative/regulatory terms hain, company nahi.
+    "icdr", "regulations", "act", "rules", "guidelines", "circular",
+    "notification", "schedule", "annexure", "gazette",
 }
 
-# Hinglish: Project ke andar ke default paths.
+# Project ke andar ke default paths.
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = BASE_DIR / "outputs"
 DEFAULT_REPORTS_DIR = BASE_DIR / "reports"
 
-# Hinglish: OCR aur face-detection confidence thresholds - tuning knobs.
+# OCR aur face-detection confidence thresholds - tuning knobs.
 OCR_MIN_CONFIDENCE = 40          # 0-100, Tesseract confidence scale
-# Hinglish: scaleFactor=1.05 choti/dabi hui ID-photo par recall improve
+# scaleFactor=1.05 choti/dabi hui ID-photo par recall improve
 # karta hai (tested on sample PAN/Aadhaar images) - tradeoff ye hai ki
 # kabhi-kabhi textured background par ek extra false-positive box aa
 # sakta hai. PRIVACY TOOL ke liye ye acceptable tradeoff hai: face miss
@@ -107,6 +115,6 @@ FACE_DETECTION_SCALE_FACTOR = 1.05
 FACE_DETECTION_MIN_NEIGHBORS = 5
 FACE_MIN_SIZE_PX = 40
 
-# Hinglish: Kis extent tak fake replacement text allow hai (bahut lamba
+# Kis extent tak fake replacement text allow hai (bahut lamba
 # fake naam original table layout todh sakta hai).
 MAX_SYNTHETIC_NAME_LENGTH_RATIO = 1.6  # fake name original se itna zyada lamba na ho

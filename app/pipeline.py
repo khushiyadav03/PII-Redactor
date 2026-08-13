@@ -1,5 +1,5 @@
 """
-Hinglish: Ye pipeline ka central orchestrator hai. CLI (run_redaction.py)
+Ye pipeline ka central orchestrator hai. CLI (run_redaction.py)
 aur FastAPI (agar banaya) dono isi `process_document()` function ko call
 karenge - logic kahin duplicate nahi hoga (assignment requirement #23).
 
@@ -11,7 +11,12 @@ PHASE STATUS:
 """
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
+
+# Hinglish: Long documents mein sirf spinner se user ko pata nahi chalta ki
+# processing actually chal rahi hai. Isliye backend ki real processing state
+# ko UI mein expose karte hain — optional callback, koi extra infra nahi.
+ProgressCallback = Callable[[dict], None]
 
 from app.config import RedactionPolicy
 from app.document.image_extractor import extract_images, write_docx_with_replaced_images
@@ -34,9 +39,20 @@ class PipelineResult:
     image_redaction_reports: List[Tuple[str, ImageRedactionReport]] = field(default_factory=list)
 
 
-def process_document(input_path: str, output_path: str, policy: RedactionPolicy = None) -> PipelineResult:
+def _emit_progress(callback: Optional[ProgressCallback], stage: str, **data) -> None:
+    if callback is None:
+        return
+    callback({"stage": stage, **data})
+
+
+def process_document(
+    input_path: str,
+    output_path: str,
+    policy: RedactionPolicy = None,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> PipelineResult:
     """
-    Hinglish: Full pipeline (text + image):
+    Full pipeline (text + image):
       1. Text: document load -> detect+redact PII (consistent replacements)
          -> metadata clean -> temp save
       2. Images: temp docx ke images extract karo -> har image OCR/face/
@@ -47,13 +63,23 @@ def process_document(input_path: str, output_path: str, policy: RedactionPolicy 
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     policy = policy or RedactionPolicy()
+    _emit_progress(progress_callback, "loading_document")
     content = load_document(input_path)
+
+    paragraphs = content.all_paragraphs()
+    _emit_progress(
+        progress_callback,
+        "analyzing_text",
+        current=0,
+        total=len(paragraphs),
+    )
 
     replacer = ConsistentReplacer()
     total_text_redactions = redact_logical_paragraphs(
-        content.all_paragraphs(), replacer, policy
+        paragraphs, replacer, policy, progress_callback=progress_callback
     )
 
+    _emit_progress(progress_callback, "cleaning_metadata")
     clean_core_metadata(content.document)
 
     output_path_obj = Path(output_path)
@@ -63,6 +89,7 @@ def process_document(input_path: str, output_path: str, policy: RedactionPolicy 
     # images abhi original hain) - phir isi file ke images replace karke
     # final output banate hain.
     temp_text_redacted_path = str(output_path_obj.with_suffix(".text_only.tmp.docx"))
+    _emit_progress(progress_callback, "saving_document")
     content.document.save(temp_text_redacted_path)
 
     try:
@@ -70,8 +97,15 @@ def process_document(input_path: str, output_path: str, policy: RedactionPolicy 
         image_replacements = {}
         reports: List[Tuple[str, ImageRedactionReport]] = []
         images_modified_count = 0
+        total_images = len(images)
 
-        for zip_name, image_bytes in images:
+        for image_index, (zip_name, image_bytes) in enumerate(images, start=1):
+            _emit_progress(
+                progress_callback,
+                "processing_images",
+                current=image_index,
+                total=total_images,
+            )
             # Hinglish: Original image format nikal kar pass karte hain (e.g. .jpeg)
             img_ext = Path(zip_name).suffix.lower()
             new_bytes, report = redact_image_bytes(image_bytes, policy, img_ext)
@@ -80,6 +114,7 @@ def process_document(input_path: str, output_path: str, policy: RedactionPolicy 
                 image_replacements[zip_name] = new_bytes
                 images_modified_count += 1
 
+        _emit_progress(progress_callback, "finalizing")
         write_docx_with_replaced_images(temp_text_redacted_path, output_path, image_replacements)
     finally:
         # Hinglish: temp file cleanup - permanently store nahi karte (privacy requirement #28)

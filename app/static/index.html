@@ -495,7 +495,7 @@
             <!-- Loader State -->
             <div class="loader-container" id="loaderContainer">
                 <div class="spinner"></div>
-                <div class="loader-text">Analyzing & Redacting Document...</div>
+                <div class="loader-text" id="loaderText">Analyzing & Redacting document...</div>
             </div>
 
             <!-- Messages -->
@@ -510,7 +510,7 @@
                 <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
-                <span>Redaction complete! Your document has been safely sanitized.</span>
+                <span>✓ Redaction Complete</span>
             </div>
         </div>
 
@@ -525,11 +525,11 @@
             <div class="metrics-grid">
                 <div class="metric-item">
                     <div class="metric-val" id="metricTextRed">0</div>
-                    <div class="metric-label">Text Fields Redacted</div>
+                    <div class="metric-label">PII Redactions</div>
                 </div>
                 <div class="metric-item">
                     <div class="metric-val" id="metricImgsMasked">0</div>
-                    <div class="metric-label">Images Masked</div>
+                    <div class="metric-label">Images Protected</div>
                 </div>
                 <div class="metric-item">
                     <div class="metric-val" id="metricParas">0</div>
@@ -562,6 +562,7 @@
         const redactBtn = document.getElementById('redactBtn');
         const downloadBtn = document.getElementById('downloadBtn');
         const loaderContainer = document.getElementById('loaderContainer');
+        const loaderText = document.getElementById('loaderText');
         const errorMessage = document.getElementById('errorMessage');
         const errorText = document.getElementById('errorText');
         const successMessage = document.getElementById('successMessage');
@@ -635,21 +636,20 @@
         redactBtn.addEventListener('click', async () => {
             if (!selectedFile) return;
 
-            // Update UI to loading
             redactBtn.disabled = true;
             hideElement(errorMessage);
             hideElement(successMessage);
             hideElement(metricsCard);
             showElement(loaderContainer);
             hideElement(redactBtn);
+            setLoaderText('Uploading document...');
 
             const formData = new FormData();
             formData.append('file', selectedFile);
 
-            // Resolve backend URL based on host
             const backendBase = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
                 ? ''
-                : 'https://pii-redactor-backend.onrender.com'; // Deployed backend URL
+                : 'https://pii-redactor-backend.onrender.com';
 
             try {
                 const response = await fetch(backendBase + '/redact', {
@@ -658,7 +658,7 @@
                 });
 
                 if (!response.ok) {
-                    let message = 'An error occurred while processing the document.';
+                    let message = 'Redaction failed. Please try again.';
                     try {
                         const json = await response.json();
                         if (json && json.detail) {
@@ -668,24 +668,25 @@
                     throw new Error(message);
                 }
 
-                // Success
-                redactedFileBlob = await response.blob();
+                const { metrics, fileBlob, streamError } = await readRedactStream(response);
+                if (streamError) {
+                    throw new Error(streamError);
+                }
+                if (!fileBlob || fileBlob.size === 0) {
+                    throw new Error('Redaction failed. Please try again.');
+                }
+
+                redactedFileBlob = fileBlob;
                 redactedFileName = 'redacted_' + selectedFile.name;
 
-                // Read metrics response headers (Exposed via FastAPI CORSMiddleware)
-                const textApplied = response.headers.get('X-Text-Redactions-Applied') || '0';
-                const imgsModified = response.headers.get('X-Images-Redacted') || '0';
-                const parasScanned = response.headers.get('X-Paragraphs-Scanned') || '0';
-                const tablesFound = response.headers.get('X-Tables-Found') || '0';
-                const imgsFound = response.headers.get('X-Images-Found') || '0';
+                // Hinglish: Metrics sirf backend stream se aate hain — frontend mein calculate nahi karte.
+                document.getElementById('metricTextRed').textContent = String(metrics?.text_redactions_applied ?? 0);
+                document.getElementById('metricImgsMasked').textContent = String(metrics?.images_modified ?? 0);
+                document.getElementById('metricParas').textContent = String(metrics?.paragraphs_scanned ?? 0);
+                document.getElementById('metricTables').textContent = String(metrics?.tables_found ?? 0);
+                document.getElementById('metricImages').textContent = String(metrics?.images_found ?? 0);
 
-                // Update UI metrics values
-                document.getElementById('metricTextRed').textContent = textApplied;
-                document.getElementById('metricImgsMasked').textContent = imgsModified;
-                document.getElementById('metricParas').textContent = parasScanned;
-                document.getElementById('metricTables').textContent = tablesFound;
-                document.getElementById('metricImages').textContent = imgsFound;
-
+                setLoaderText('Finalizing Redacted Document...');
                 hideElement(loaderContainer);
                 showElement(successMessage);
                 showElement(metricsCard);
@@ -693,7 +694,11 @@
                 showElement(downloadBtn);
             } catch (error) {
                 hideElement(loaderContainer);
-                showError(error.message);
+                const detail = error && error.message ? error.message : 'Redaction failed. Please try again.';
+                showError(detail.startsWith('Redaction failed') ? detail : 'Redaction failed. Please try again.');
+                if (!detail.startsWith('Redaction failed')) {
+                    errorText.textContent = 'Redaction failed. Please try again. ' + detail;
+                }
                 showElement(redactBtn);
                 redactBtn.disabled = false;
             }
@@ -729,6 +734,162 @@
         function showError(text) {
             errorText.textContent = text;
             showElement(errorMessage);
+        }
+
+        function setLoaderText(text) {
+            if (loaderText) {
+                loaderText.textContent = text;
+            }
+        }
+
+        function progressMessage(payload) {
+            const stage = payload.stage;
+            const current = payload.current;
+            const total = payload.total;
+
+            if (stage === 'loading_document') {
+                return 'Analyzing document...';
+            }
+            if (stage === 'analyzing_text') {
+                if (typeof current === 'number' && typeof total === 'number' && total > 20 && current > 0) {
+                    return `Analyzing & Redacting section ${current} of ${total}...`;
+                }
+                return 'Analyzing & Redacting document...';
+            }
+            if (stage === 'cleaning_metadata') {
+                return 'Applying redactions...';
+            }
+            if (stage === 'saving_document') {
+                return 'Applying redactions...';
+            }
+            if (stage === 'processing_images') {
+                if (typeof current === 'number' && typeof total === 'number' && total > 0) {
+                    return `Processing embedded image ${current} of ${total}...`;
+                }
+                return 'Processing embedded images...';
+            }
+            if (stage === 'finalizing') {
+                return 'Finalizing Redacted Document...';
+            }
+            return 'Analyzing & Redacting document...';
+        }
+
+        async function readRedactStream(response) {
+            const FILE_MARKER_BYTES = new TextEncoder().encode('\n---FILE---\n');
+            const decoder = new TextDecoder();
+            let byteBuffer = new Uint8Array(0);
+            let lineBuffer = '';
+            let metrics = null;
+            let streamError = null;
+            const fileChunks = [];
+            let inFileSection = false;
+
+            if (!response.body) {
+                return { metrics: null, fileBlob: null, streamError: 'Redaction failed. Please try again.' };
+            }
+
+            const reader = response.body.getReader();
+
+            function concatBytes(a, b) {
+                const out = new Uint8Array(a.length + b.length);
+                out.set(a, 0);
+                out.set(b, a.length);
+                return out;
+            }
+
+            function indexOfSubarray(haystack, needle) {
+                for (let i = 0; i <= haystack.length - needle.length; i++) {
+                    let matched = true;
+                    for (let j = 0; j < needle.length; j++) {
+                        if (haystack[i + j] !== needle[j]) {
+                            matched = false;
+                            break;
+                        }
+                    }
+                    if (matched) {
+                        return i;
+                    }
+                }
+                return -1;
+            }
+
+            function consumeStreamTextLines(textPart) {
+                lineBuffer += textPart;
+                const lines = lineBuffer.split('\n');
+                lineBuffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (!line) {
+                        continue;
+                    }
+                    if (line.startsWith('PROGRESS:')) {
+                        try {
+                            const payload = JSON.parse(line.slice('PROGRESS:'.length));
+                            setLoaderText(progressMessage(payload));
+                        } catch (e) {}
+                    } else if (line.startsWith('METRICS:')) {
+                        try {
+                            metrics = JSON.parse(line.slice('METRICS:'.length));
+                        } catch (e) {}
+                    } else if (line.startsWith('ERROR:')) {
+                        try {
+                            const err = JSON.parse(line.slice('ERROR:'.length));
+                            streamError = err.detail || 'Redaction failed. Please try again.';
+                        } catch (e) {
+                            streamError = 'Redaction failed. Please try again.';
+                        }
+                    }
+                }
+            }
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    break;
+                }
+
+                if (inFileSection) {
+                    fileChunks.push(value);
+                    continue;
+                }
+
+                byteBuffer = concatBytes(byteBuffer, value);
+                const markerIndex = indexOfSubarray(byteBuffer, FILE_MARKER_BYTES);
+
+                if (markerIndex !== -1) {
+                    consumeStreamTextLines(decoder.decode(byteBuffer.slice(0, markerIndex)));
+                    inFileSection = true;
+                    const afterMarker = byteBuffer.slice(markerIndex + FILE_MARKER_BYTES.length);
+                    byteBuffer = new Uint8Array(0);
+                    if (afterMarker.length > 0) {
+                        fileChunks.push(afterMarker);
+                    }
+                    continue;
+                }
+
+                const keepBytes = Math.min(byteBuffer.length, FILE_MARKER_BYTES.length - 1);
+                if (byteBuffer.length > keepBytes) {
+                    consumeStreamTextLines(decoder.decode(byteBuffer.slice(0, byteBuffer.length - keepBytes)));
+                    byteBuffer = byteBuffer.slice(byteBuffer.length - keepBytes);
+                }
+            }
+
+            if (!inFileSection && byteBuffer.length > 0) {
+                consumeStreamTextLines(decoder.decode(byteBuffer));
+            }
+            if (lineBuffer.trim()) {
+                consumeStreamTextLines('\n' + lineBuffer);
+                lineBuffer = '';
+            }
+
+            let fileBlob = null;
+            if (fileChunks.length > 0) {
+                fileBlob = new Blob(fileChunks, {
+                    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                });
+            }
+
+            return { metrics, fileBlob, streamError };
         }
 
         function formatBytes(bytes, decimals = 2) {

@@ -2,20 +2,27 @@
 Hinglish: Minimal FastAPI API for PII Redactor.
 Endpoints:
   GET /health - health check
-  POST /redact - upload DOCX file, returns redacted DOCX
+  POST /redact - upload DOCX file, returns streamed progress + metrics + redacted DOCX
   GET / - serves frontend
 """
 import os
-import shutil
+import queue
 import tempfile
 import logging
+import threading
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.pipeline import process_document
 from app.config import RedactionPolicy
+from app.stream_protocol import (
+    FILE_MARKER,
+    encode_error,
+    encode_metrics,
+    encode_progress,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api")
@@ -29,10 +36,11 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Text-Redactions-Applied", "X-Images-Redacted", "X-Paragraphs-Scanned", "X-Tables-Found", "X-Images-Found"],
+    expose_headers=["Content-Type"],
 )
 
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
+STREAM_MEDIA_TYPE = "application/x-pii-redactor-stream"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 INDEX_HTML_PATH = STATIC_DIR / "index.html"
 
@@ -45,6 +53,80 @@ def cleanup_file(path: str):
             logger.info(f"Cleaned up temp file: {path}")
     except Exception as e:
         logger.error(f"Error cleaning up temp file {path}: {e}")
+
+
+def _stream_redaction(temp_in_path: str, temp_out_path: str, policy: RedactionPolicy):
+    """
+    Hinglish: Pipeline ko background thread mein chala kar real progress events
+    stream karta hai, phir existing PipelineResult counters + valid DOCX bytes bhejta hai.
+    """
+    progress_queue: queue.Queue = queue.Queue()
+    result_holder: dict = {}
+    error_holder: dict = {}
+
+    def progress_callback(payload: dict):
+        progress_queue.put({"type": "progress", "payload": payload})
+
+    def run_pipeline():
+        try:
+            result_holder["result"] = process_document(
+                temp_in_path,
+                temp_out_path,
+                policy,
+                progress_callback=progress_callback,
+            )
+            progress_queue.put({"type": "done"})
+        except Exception as exc:
+            error_holder["error"] = exc
+            progress_queue.put({"type": "error"})
+
+    thread = threading.Thread(target=run_pipeline, daemon=True)
+    thread.start()
+
+    while True:
+        item = progress_queue.get()
+        if item["type"] == "progress":
+            payload = item["payload"]
+            yield encode_progress(payload["stage"], **{
+                k: v for k, v in payload.items() if k != "stage"
+            })
+        elif item["type"] == "error":
+            err = error_holder.get("error")
+            if isinstance(err, ValueError):
+                detail = str(err)
+            else:
+                detail = "An error occurred during document redaction processing."
+                logger.error(f"Internal processing failure: {err}")
+            yield encode_error(detail)
+            cleanup_file(temp_in_path)
+            cleanup_file(temp_out_path)
+            return
+        elif item["type"] == "done":
+            break
+
+    thread.join()
+
+    result = result_holder.get("result")
+    if result is None:
+        yield encode_error("Sanitized output could not be generated.")
+        cleanup_file(temp_in_path)
+        cleanup_file(temp_out_path)
+        return
+
+    if not os.path.exists(temp_out_path) or os.path.getsize(temp_out_path) == 0:
+        yield encode_error("Sanitized output could not be generated.")
+        cleanup_file(temp_in_path)
+        cleanup_file(temp_out_path)
+        return
+
+    yield encode_metrics(result)
+    yield FILE_MARKER
+    with open(temp_out_path, "rb") as output_file:
+        while chunk := output_file.read(65536):
+            yield chunk
+
+    cleanup_file(temp_in_path)
+    cleanup_file(temp_out_path)
 
 
 @app.get("/health")
@@ -64,7 +146,6 @@ def get_frontend():
 
 @app.post("/redact")
 async def redact_file(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     redact_names: bool = Form(True),
     redact_emails: bool = Form(True),
@@ -113,59 +194,34 @@ async def redact_file(
             logger.warning("File upload rejected: file is empty.")
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-        # Process the document
-        try:
-            policy = RedactionPolicy(
-                redact_names=redact_names,
-                redact_emails=redact_emails,
-                redact_phones=redact_phones,
-                redact_companies=redact_companies,
-                redact_addresses=redact_addresses,
-                redact_ssn=redact_ssn,
-                redact_credit_card=redact_credit_card,
-                redact_dob=redact_dob,
-                redact_ip=redact_ip,
-                redact_pan=redact_pan,
-                redact_aadhaar=redact_aadhaar,
-                redact_passport=redact_passport,
-                redact_faces=redact_faces,
-                redact_id_documents=redact_id_documents,
-                redact_qr_on_id=redact_qr_on_id,
-                redact_signatures_on_id=redact_signatures_on_id,
-            )
-            result = process_document(temp_in_path, temp_out_path, policy)
-        except ValueError as val_err:
-            # Hinglish: Malformed DOCX files ya unprocessable images par clear error
-            err_msg = str(val_err)
-            logger.warning(f"Processing validation failure: {err_msg}")
-            raise HTTPException(status_code=422, detail=err_msg)
-        except Exception as exc:
-            # Hinglish: System levels error - raw Python traceback client ko nahi bhejte security/privacy ke liye
-            logger.error(f"Internal processing failure: {exc}")
-            raise HTTPException(status_code=500, detail="An error occurred during document redaction processing.")
-
-        if not os.path.exists(temp_out_path) or os.path.getsize(temp_out_path) == 0:
-            logger.error("Redacted output file not generated or empty.")
-            raise HTTPException(status_code=500, detail="Sanitized output could not be generated.")
-
-        # Hinglish: response return karne ke baad clean-up background task schedule karte hain
-        background_tasks.add_task(cleanup_file, temp_in_path)
-        background_tasks.add_task(cleanup_file, temp_out_path)
+        policy = RedactionPolicy(
+            redact_names=redact_names,
+            redact_emails=redact_emails,
+            redact_phones=redact_phones,
+            redact_companies=redact_companies,
+            redact_addresses=redact_addresses,
+            redact_ssn=redact_ssn,
+            redact_credit_card=redact_credit_card,
+            redact_dob=redact_dob,
+            redact_ip=redact_ip,
+            redact_pan=redact_pan,
+            redact_aadhaar=redact_aadhaar,
+            redact_passport=redact_passport,
+            redact_faces=redact_faces,
+            redact_id_documents=redact_id_documents,
+            redact_qr_on_id=redact_qr_on_id,
+            redact_signatures_on_id=redact_signatures_on_id,
+        )
 
         safe_out_name = f"redacted_{Path(filename).name}"
         headers = {
-            "Access-Control-Expose-Headers": "X-Text-Redactions-Applied, X-Images-Redacted, X-Paragraphs-Scanned, X-Tables-Found, X-Images-Found",
-            "X-Text-Redactions-Applied": str(result.text_redactions_applied),
-            "X-Images-Redacted": str(result.images_modified),
-            "X-Paragraphs-Scanned": str(result.paragraphs_scanned),
-            "X-Tables-Found": str(result.tables_found),
-            "X-Images-Found": str(result.images_found),
+            "Content-Disposition": f'attachment; filename="{safe_out_name}"',
+            "Cache-Control": "no-store",
         }
-        return FileResponse(
-            temp_out_path,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            filename=safe_out_name,
-            headers=headers
+        return StreamingResponse(
+            _stream_redaction(temp_in_path, temp_out_path, policy),
+            media_type=STREAM_MEDIA_TYPE,
+            headers=headers,
         )
 
     except HTTPException:

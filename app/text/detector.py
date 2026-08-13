@@ -49,17 +49,24 @@ def _is_allowlisted_company(name: str) -> bool:
 
 def _is_likely_ner_misfire(ent_text: str) -> bool:
     """
-    Hinglish: spaCy ORG-label ke do common misfire patterns filter karte hain:
-      1. ent_text ek known non-company acronym hai (PAN, SSN, KYC, etc.)
-      2. ent_text mein digits hain (real company names is dataset ke
-         context mein digits nahi rakhte; jab ORG span mein number ho
-         to aksar ye "Order No 12345" jaisa false span hota hai, real
-         company name nahi). Ye ek documented heuristic limitation hai -
-         genuine company names jinme digits hote hain (jaise "3M",
-         "7-Eleven") is heuristic se miss ho sakte hain.
+    Hinglish: spaCy ORG-label ke teen common misfire patterns filter karte hain:
+      1. ent_text exactly ek known non-company acronym hai (PAN, SSN, KYC, etc.)
+      2. ent_text mein digits hain — real company names is prospectus context
+         mein digits nahi rakhte; "Order No 12345" jaisa false span hota hai.
+      3. ent_text ka PEHLA WORD ek known non-company acronym hai — spaCy kabhi
+         kabhi "ICDR Regulations" ya "PAN Card" jaise multi-word spans ko ORG
+         tag kar deta hai. First-word check se ye sab filtered ho jaate hain.
+         (Documented heuristic limitation: "3M", "7-Eleven" miss ho sakte hain.)
     """
     stripped = ent_text.strip()
-    if stripped.lower() in NON_COMPANY_ACRONYMS:
+    lower = stripped.lower()
+    # Exact match
+    if lower in NON_COMPANY_ACRONYMS:
+        return True
+    # Hinglish: Multi-word span jo ek blocked acronym se start ho —
+    # jaise "ICDR Regulations", "PAN Card" etc. ko company nahi mante.
+    first_word = lower.split()[0].rstrip(".,;:") if lower.split() else ""
+    if first_word in NON_COMPANY_ACRONYMS:
         return True
     if any(ch.isdigit() for ch in stripped):
         return True
