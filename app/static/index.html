@@ -646,8 +646,13 @@
             const formData = new FormData();
             formData.append('file', selectedFile);
 
+            // Resolve backend URL based on host
+            const backendBase = window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
+                ? ''
+                : 'https://pii-redactor-backend.onrender.com'; // Deployed backend URL
+
             try {
-                const response = await fetch('/redact', {
+                const response = await fetch(backendBase + '/redact', {
                     method: 'POST',
                     body: formData
                 });

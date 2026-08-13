@@ -180,6 +180,18 @@ pii-redactor/
 └── run_redaction.py                # CLI entry point
 ```
 
+## Deployment
+
+This application supports production deployment split into a static frontend and a containerized backend, due to the native dependencies of Tesseract OCR and OpenCV.
+
+### 1. Frontend (Vercel)
+* The static frontend is located in [index.html](file:///c:/Users/Khushi/Downloads/pii-redactor-submission/pii-redactor/app/static/index.html) and is deployed directly to Vercel (configured via [vercel.json](file:///c:/Users/Khushi/Downloads/pii-redactor-submission/pii-redactor/vercel.json)).
+* It dynamically resolves the API endpoint, connecting to local servers when running locally and falling back to a configured Render backend URL in production.
+
+### 2. Backend (Render / Docker)
+* The backend runs the FastAPI application and must be deployed using a containerized host (such as Render Web Services with a Docker environment) because it requires system-level binaries (`tesseract-ocr`, `libgl1-mesa-glx`, `libglib2.0-0`).
+* A validated [Dockerfile](file:///c:/Users/Khushi/Downloads/pii-redactor-submission/pii-redactor/Dockerfile) is provided in the root directory to package the Python runtime, Tesseract OCR system packages, OpenCV dynamic libraries, and the downloaded spaCy models.
+
 ## Privacy notes
 
 Raw PII values are never printed to console or written to logs/reports — only counts and categories. No document content is sent to any external/cloud API; all processing (regex, spaCy, OCR, face detection) runs locally. Temporary intermediate files are deleted after each run.

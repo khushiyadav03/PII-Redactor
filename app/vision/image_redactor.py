@@ -179,7 +179,7 @@ def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: 
         report.doc_type = classification.doc_type
         report.doc_confidence = classification.confidence
 
-        if classification.doc_type != "unknown":
+        if classification.doc_type != "unknown" and classification.confidence == "high":
             # ---- Step 4: label-based name/signature heuristic & fallbacks ----
             id_field_boxes = find_id_field_boxes(words, classification.doc_type)
             
@@ -238,7 +238,7 @@ def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: 
         report.faces_masked = len(faces)
 
     # ---- Step 6: QR code detection (only mask if inside a recognized ID doc) ----
-    if policy.redact_qr_on_id and report.doc_type != "unknown":
+    if policy.redact_qr_on_id and report.doc_type != "unknown" and report.doc_confidence == "high":
         qrs = detect_qr_codes(image)
         for q in qrs:
             boxes_to_mask.append(q.bounding_box)

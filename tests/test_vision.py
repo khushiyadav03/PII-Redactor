@@ -582,3 +582,64 @@ def test_generic_face_not_redacted_if_face_redaction_disabled():
         redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         assert not np.all(redacted_img[100:150, 100:150] == 0)
 
+
+def test_low_confidence_id_does_not_trigger_aggressive_masking():
+    # Hinglish: low-confidence ID document classification should not trigger
+    # fallbacks (like photo/signature/QR layout fallbacks).
+    from unittest.mock import patch
+    from app.vision.id_detector import IdDocumentClassification
+    
+    img = np.ones((400, 800, 3), dtype=np.uint8) * 255
+    cv2.putText(img, "PAN: NBWPS1951N", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    
+    success, encoded = cv2.imencode(".png", img)
+    assert success
+    
+    with patch("app.vision.image_redactor.classify_id_document") as mock_classify:
+        mock_classify.return_value = IdDocumentClassification(doc_type="pan", confidence="low", matched_keywords=[])
+        
+        policy = RedactionPolicy()
+        policy.redact_id_documents = True
+        
+        new_bytes, report = redact_image_bytes(encoded.tobytes(), policy, ".png")
+        
+        assert report.doc_type == "pan"
+        assert report.doc_confidence == "low"
+        
+        assert report.id_fields_masked == 0
+        assert report.photo_regions_masked == 0
+        assert report.signatures_masked == 0
+        
+        # Verify that generic text redaction still redacted the PAN number
+        arr = np.frombuffer(new_bytes, dtype=np.uint8)
+        redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        words_after = run_ocr(redacted_img)
+        text_after = " ".join(w.text for w in words_after).lower()
+        assert "nbwps1951n" not in text_after
+
+
+def test_high_confidence_id_triggers_aggressive_masking():
+    # Hinglish: high-confidence ID document classification should trigger layout fallbacks
+    from unittest.mock import patch
+    from app.vision.id_detector import IdDocumentClassification
+    
+    img = np.ones((400, 800, 3), dtype=np.uint8) * 255
+    cv2.putText(img, "PAN Card", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(img, "PAN: NBWPS1951N", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    
+    success, encoded = cv2.imencode(".png", img)
+    assert success
+    
+    with patch("app.vision.image_redactor.classify_id_document") as mock_classify:
+        mock_classify.return_value = IdDocumentClassification(doc_type="pan", confidence="high", matched_keywords=["pan"])
+        
+        policy = RedactionPolicy()
+        policy.redact_id_documents = True
+        
+        new_bytes, report = redact_image_bytes(encoded.tobytes(), policy, ".png")
+        
+        assert report.doc_type == "pan"
+        assert report.doc_confidence == "high"
+        assert report.photo_regions_masked >= 1
+
+
