@@ -41,6 +41,8 @@ class ImageRedactionReport:
     text_pii_boxes_masked: int = 0
     faces_masked: int = 0
     id_fields_masked: int = 0
+    photo_regions_masked: int = 0
+    signatures_masked: int = 0
     qr_codes_masked: int = 0
     modified: bool = False
 
@@ -140,13 +142,13 @@ def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: 
     ek report (sirf counts, raw PII nahi) return karta hai.
 
     Agar image decode nahi ho payi (corrupted/unsupported format), to
-    original bytes hi wapas kar dete hain aur report mein modified=False
-    rehta hai - crash nahi karte (error-handling requirement #27).
+    processing fail ho jayegi (ValueError) taaki unredacted visual PII
+    silently leak na ho (Privacy Fail-Closed Requirement).
     """
     np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
     image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     if image is None:
-        return image_bytes, ImageRedactionReport(doc_type="unreadable", doc_confidence="low")
+        raise ValueError("Image could not be decoded or is corrupted. Failing document processing to prevent PII leak.")
 
     boxes_to_mask: List[Tuple[int, int, int, int]] = []
     report = ImageRedactionReport(doc_type="unknown", doc_confidence="low")
@@ -183,25 +185,32 @@ def redact_image_bytes(image_bytes: bytes, policy: RedactionPolicy, format_ext: 
             
             has_signature_label = any(f_name == "signature" for f_name, _ in id_field_boxes)
             
+            photo_regions_count = 0
+            signatures_count = 0
+            
             for field_name, box in id_field_boxes:
                 if field_name == "signature":
                     if not policy.redact_signatures_on_id:
                         continue
                     boxes_to_mask.append(box)
+                    signatures_count += 1
                 elif field_name == "fallback_photo":
-                    has_overlapping_face = False
-                    for f in faces:
-                        if _rect_intersect(f.box, box) is not None:
-                            has_overlapping_face = True
-                            break
-                    if not has_overlapping_face and policy.redact_faces:
+                    if policy.redact_faces:
                         boxes_to_mask.append(box)
+                        photo_regions_count += 1
                 elif field_name == "fallback_signature":
                     if not has_signature_label and policy.redact_signatures_on_id:
                         boxes_to_mask.append(box)
+                        signatures_count += 1
+                elif field_name == "fallback_qr":
+                    if policy.redact_qr_on_id:
+                        boxes_to_mask.append(box)
+                        report.qr_codes_masked += 1
                 else:
                     boxes_to_mask.append(box)
             report.id_fields_masked = len([f for f, _ in id_field_boxes if not f.startswith("fallback_")])
+            report.photo_regions_masked = photo_regions_count
+            report.signatures_masked = signatures_count
 
             # Hinglish: DOC-LEVEL CONTEXT OVERRIDE.
             # Generic text detector ko Aadhaar/Passport number redact

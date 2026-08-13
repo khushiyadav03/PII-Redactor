@@ -27,29 +27,93 @@ class IdDocumentClassification:
     matched_keywords: List[str]
 
 
+def _levenshtein_distance(s1: str, s2: str) -> int:
+    if len(s1) < len(s2):
+        return _levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
+def _has_fuzzy_substring(text: str, target: str, max_dist: int) -> bool:
+    target_len = len(target)
+    text_len = len(text)
+    if text_len < target_len:
+        return _levenshtein_distance(text, target) <= max_dist
+    
+    # Hinglish: Sliding window approach to search for fuzzy keyword matches in noisy OCR
+    for i in range(text_len - target_len + 1):
+        sub = text[i:i+target_len]
+        if _levenshtein_distance(sub, target) <= max_dist:
+            return True
+    return False
+
+
+def _normalize_text(text: str) -> str:
+    # Hinglish: Lowercase, collapse whitespace, and strip punctuation for robust fuzzy matches
+    t = text.lower()
+    t = "".join(c if (c.isalnum() or c.isspace()) else " " for c in t)
+    t = " ".join(t.split())
+    return t
+
+
 def classify_id_document(ocr_words: List[OcrWord]) -> IdDocumentClassification:
     """
-    Hinglish: Saare OCR words ko jodkar ek text banate hain, phir context
-    keywords dhoondte hain. Jitne zyada strong keywords match karein utni
-    confidence "high" hoti hai.
-
-    Input: OCR se mile words (ocr.py se)
-    Output: IdDocumentClassification (kaunsa document, kitni confidence)
+    Hinglish: Saare OCR words ko normalize karke fuzzy context keywords matching
+    chalate hain taaki noisy Tesseract OCR outputs (e.g. "Urique" for "Unique")
+    par classification fail na ho.
     """
-    full_text = " ".join(w.text for w in ocr_words).lower()
+    raw_text = " ".join(w.text for w in ocr_words)
+    normalized_text = _normalize_text(raw_text)
+
+    # Aadhaar keywords matched
+    aadhaar_kws = []
+    if any(x in normalized_text for x in ["aadhaar", "aadhar", "adhar"]) or _has_fuzzy_substring(normalized_text, "aadhaar", 1):
+        aadhaar_kws.append("aadhaar")
+    if "uidai" in normalized_text or _has_fuzzy_substring(normalized_text, "uidai", 1):
+        aadhaar_kws.append("uidai")
+    if _has_fuzzy_substring(normalized_text, "unique identification authority", 4):
+        aadhaar_kws.append("unique identification authority")
+    if _has_fuzzy_substring(normalized_text, "government of india", 3) or _has_fuzzy_substring(normalized_text, "govt of india", 2):
+        aadhaar_kws.append("government of india")
+
+    # PAN keywords matched
+    pan_kws = []
+    if _has_fuzzy_substring(normalized_text, "permanent account number", 3):
+        pan_kws.append("permanent account number")
+    if _has_fuzzy_substring(normalized_text, "income tax department", 3):
+        pan_kws.append("income tax department")
+    if "pan card" in normalized_text or _has_fuzzy_substring(normalized_text, "pan card", 1):
+        pan_kws.append("pan card")
+
+    # Passport keywords matched
+    passport_kws = []
+    if "passport" in normalized_text or _has_fuzzy_substring(normalized_text, "passport", 1):
+        passport_kws.append("passport")
+    if _has_fuzzy_substring(normalized_text, "republic of india", 3):
+        passport_kws.append("republic of india")
+    if "type p" in normalized_text:
+        passport_kws.append("type p")
 
     matches = {
-        "pan": [kw for kw in PAN_CONTEXT_KEYWORDS if kw in full_text],
-        "aadhaar": [kw for kw in AADHAAR_CONTEXT_KEYWORDS if kw in full_text],
-        "passport": [kw for kw in PASSPORT_CONTEXT_KEYWORDS if kw in full_text],
+        "pan": pan_kws,
+        "aadhaar": aadhaar_kws,
+        "passport": passport_kws,
     }
 
-    # Hinglish: Numeric pattern bhi check karte hain (PAN format, Aadhaar
-    # 12-digit groups, passport format) - keyword + pattern dono milne par
-    # confidence "high", sirf ek milne par "low".
-    has_pan_number = bool(PAN_RE.search(" ".join(w.text for w in ocr_words)))
-    has_aadhaar_number = bool(AADHAAR_RE.search(" ".join(w.text for w in ocr_words)))
-    has_passport_number = bool(PASSPORT_RE.search(" ".join(w.text for w in ocr_words)))
+    # Hinglish: Numeric pattern check for classification confidence
+    has_pan_number = bool(PAN_RE.search(raw_text))
+    has_aadhaar_number = bool(AADHAAR_RE.search(raw_text))
+    has_passport_number = bool(PASSPORT_RE.search(raw_text))
 
     best_type = "unknown"
     best_score = 0
@@ -244,15 +308,15 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
         if doc_type == "pan":
             photo_box = (
                 card_min_x + int(card_w * 0.02),
-                card_min_y + int(front_h * 0.35),
-                card_min_x + int(card_w * 0.40),
-                card_min_y + int(front_h * 0.70)
+                card_min_y + int(front_h * 0.12),
+                card_min_x + int(card_w * 0.28),
+                card_min_y + int(front_h * 0.48)
             )
             sig_box = (
-                card_min_x + int(card_w * 0.55),
+                card_min_x + int(card_w * 0.40),
                 card_min_y + int(front_h * 0.70),
-                card_min_x + int(card_w * 0.90),
-                card_min_y + int(front_h * 0.92)
+                card_min_x + int(card_w * 0.85),
+                card_min_y + int(front_h * 0.95)
             )
             boxes.append(("fallback_photo", photo_box))
             boxes.append(("fallback_signature", sig_box))
@@ -262,9 +326,9 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
             if not has_address or card_h > 600:
                 photo_box = (
                     card_min_x + int(card_w * 0.05),
-                    card_min_y + int(front_h * 0.25),
-                    card_min_x + int(card_w * 0.40),
-                    card_min_y + int(front_h * 0.80)
+                    card_min_y + int(front_h * 0.15),
+                    card_min_x + int(card_w * 0.24),
+                    card_min_y + int(front_h * 0.85)
                 )
                 boxes.append(("fallback_photo", photo_box))
             

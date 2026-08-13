@@ -19,16 +19,10 @@ def clean_core_metadata(document: "docx.document.Document") -> None:
     Output: None
     """
     props = document.core_properties
-    props.author = ""
-    props.last_modified_by = ""
-    props.comments = ""
-    props.category = ""
-    props.description = ""
-    try:
-        props.title = ""
-        props.subject = ""
-        props.keywords = ""
-    except Exception:
-        # Hinglish: kuch properties set na ho paayein to bhi crash na ho -
-        # ye non-critical hai, best-effort cleanup hai.
-        pass
+    # Hinglish: Sab properties clean karte hain. Agar koi property writeable nahi hai
+    # to exception catch kar lete hain (different python-docx versions compliance).
+    for attr in ["author", "last_modified_by", "comments", "category", "description", "title", "subject", "keywords"]:
+        try:
+            setattr(props, attr, "")
+        except Exception:
+            pass
