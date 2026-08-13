@@ -231,8 +231,9 @@ def test_pan_photo_fallback_regression():
     fallbacks = [box for name, box in fields if name == "fallback_photo"]
     assert len(fallbacks) == 1
     x1, y1, x2, y2 = fallbacks[0]
-    # Hinglish: Verify portrait is on the right side of the card (above 50% width offset)
-    assert x1 >= 50 + int(300 * 0.50)
+    # Hinglish: Verify portrait is on the left side of the card
+    assert x1 >= 50
+    assert x2 <= 50 + int(300 * 0.45)
 
 
 def test_id_classification_false_positives():
@@ -321,12 +322,15 @@ def test_pan_photo_fallback_face_outside_expected_region():
     from app.vision.face_detector import FaceBox
     
     with patch("app.vision.image_redactor.detect_faces") as mock_detect_faces:
-        mock_detect_faces.return_value = [FaceBox(x=10, y=10, width=30, height=30)]
+        # Mock face on the right side of the card (outside the expected photo fallback ROI)
+        mock_detect_faces.return_value = [FaceBox(x=250, y=80, width=30, height=30)]
         
-        # Write PAN text on canvas
+        # Write PAN text on canvas, including keywords and number pattern to ensure high classification confidence
         img = np.ones((200, 600, 3), dtype=np.uint8) * 255
-        cv2.putText(img, "INCOME TAX DEPARTMENT GOVT. OF INDIA", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-        cv2.putText(img, "Permanent Account Number Card", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        cv2.putText(img, "INCOME TAX DEPARTMENT GOVT. OF INDIA", (50, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+        cv2.putText(img, "Permanent Account Number Card", (50, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+        cv2.putText(img, "PAN Card", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+        cv2.putText(img, "Number: ABCDE1234F", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
         
         success, encoded = cv2.imencode(".png", img)
         assert success
@@ -339,12 +343,13 @@ def test_pan_photo_fallback_face_outside_expected_region():
         
         arr = np.frombuffer(new_bytes, dtype=np.uint8)
         redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        # Expected fallback photo region on right side should be black (0, 0, 0)
-        assert np.all(redacted_img[90, 250] == 0)
+        # Expected fallback photo region on left side should be black (0, 0, 0)
+        assert np.all(redacted_img[90, 80] == 0)
 
 
 def test_pan_card_signature_redacted_real_fixture():
     _skip_if_missing(PAN_IMAGE)
+    original_img = cv2.imread(PAN_IMAGE)
     with open(PAN_IMAGE, "rb") as f:
         data = f.read()
     
@@ -356,32 +361,55 @@ def test_pan_card_signature_redacted_real_fixture():
     
     arr = np.frombuffer(new_bytes, dtype=np.uint8)
     redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    # PAN signature fallback is bottom right of front card
-    assert np.all(redacted_img[400, 500] == 0)
+    
+    # 1. Verify that the signature fallback ROI is blacked out
+    # Fallback signature box was computed as (416, 379, 658, 473)
+    sig_roi_redacted = redacted_img[380:460, 420:650]
+    assert np.all(sig_roi_redacted == 0)
+    
+    # 2. Verify that control region (Header text) is unchanged
+    control_orig = original_img[80:120, 50:300]
+    control_redacted = redacted_img[80:120, 50:300]
+    assert np.array_equal(control_orig, control_redacted)
 
 
 def test_aadhaar_card_qr_fallback_redacted_real_fixture():
     _skip_if_missing(AADHAAR_IMAGE)
+    original_img = cv2.imread(AADHAAR_IMAGE)
     with open(AADHAAR_IMAGE, "rb") as f:
         data = f.read()
     policy = RedactionPolicy()
     policy.redact_qr_on_id = True
+    policy.redact_faces = True
     new_bytes, report = redact_image_bytes(data, policy, ".png")
     assert report.doc_type == "aadhaar"
     
     arr = np.frombuffer(new_bytes, dtype=np.uint8)
     redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    # Aadhaar QR code layout fallback bottom right region should be black (0, 0, 0)
-    assert np.all(redacted_img[700, 550] == 0)
+    
+    # 1. Verify that the Aadhaar QR code fallback ROI is blacked out
+    # Fallback QR box is computed as (470, 116, 666, 362)
+    qr_roi_redacted = redacted_img[150:350, 490:650]
+    assert np.all(qr_roi_redacted == 0)
+    
+    # 2. Verify that the Aadhaar portrait photo (detected face box) is blacked out
+    # Face box was detected as (292, 198, 358, 264)
+    photo_roi_redacted = redacted_img[198:264, 292:358]
+    assert np.all(photo_roi_redacted == 0)
+    
+    # 3. Verify that control region (Name text area) is unchanged
+    control_orig = original_img[180:220, 50:200]
+    control_redacted = redacted_img[180:220, 50:200]
+    assert np.array_equal(control_orig, control_redacted)
 
 
 def test_generic_image_pii_redaction():
     # 1. White canvas with clear contact info
-    img = np.ones((200, 600, 3), dtype=np.uint8) * 255
-    cv2.putText(img, "Contact: test@example.com", (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
-    cv2.putText(img, "Phone: +91 9876543210", (50, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    original_img = np.ones((200, 600, 3), dtype=np.uint8) * 255
+    cv2.putText(original_img, "Contact: test@example.com", (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cv2.putText(original_img, "Phone: +91 9876543210", (50, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
     
-    success, encoded = cv2.imencode(".png", img)
+    success, encoded = cv2.imencode(".png", original_img)
     assert success
     
     policy = RedactionPolicy()
@@ -391,9 +419,19 @@ def test_generic_image_pii_redaction():
     
     arr = np.frombuffer(new_bytes, dtype=np.uint8)
     redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    
+    # Verify that redacted text regions are modified/masked
+    email_roi_orig = original_img[50:90, 50:400]
+    email_roi_red = redacted_img[50:90, 50:400]
+    assert not np.array_equal(email_roi_orig, email_roi_red)
+    
+    # Verify that control region is completely unchanged
+    control_orig = original_img[0:40, 0:600]
+    control_redacted = redacted_img[0:40, 0:600]
+    assert np.array_equal(control_orig, control_redacted)
+    
     words_after = run_ocr(redacted_img)
     text_after = " ".join(w.text for w in words_after).lower()
-    
     assert "test@example.com" not in text_after
     assert "9876543210" not in text_after
 

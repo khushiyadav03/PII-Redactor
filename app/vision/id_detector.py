@@ -243,10 +243,10 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
 
         if doc_type == "pan":
             photo_box = (
-                card_min_x + int(card_w * 0.60),
+                card_min_x + int(card_w * 0.02),
                 card_min_y + int(front_h * 0.35),
-                card_min_x + int(card_w * 0.88),
-                card_min_y + int(front_h * 0.75)
+                card_min_x + int(card_w * 0.40),
+                card_min_y + int(front_h * 0.70)
             )
             sig_box = (
                 card_min_x + int(card_w * 0.55),
@@ -259,7 +259,7 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
             
         elif doc_type == "aadhaar":
             has_address = any("address" in w.text.lower() or "पता" in w.text.lower() for w in words)
-            if not has_address:
+            if not has_address or card_h > 600:
                 photo_box = (
                     card_min_x + int(card_w * 0.05),
                     card_min_y + int(front_h * 0.25),
@@ -268,15 +268,14 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
                 )
                 boxes.append(("fallback_photo", photo_box))
             
-            # Hinglish: Aadhaar back-page QR code layout-fallback agar double-sided layout active ho
-            if card_h > 600:
-                qr_box = (
-                    card_min_x + int(card_w * 0.55),
-                    card_min_y + int(front_h * 1.15),
-                    card_min_x + int(card_w * 0.90),
-                    card_min_y + int(front_h * 1.85)
-                )
-                boxes.append(("fallback_qr", qr_box))
+            # Hinglish: Aadhaar front-page QR code layout-fallback (top card, upper-right area)
+            qr_box = (
+                card_min_x + int(card_w * 0.55),
+                card_min_y + int(front_h * 0.15),
+                card_min_x + int(card_w * 0.90),
+                card_min_y + int(front_h * 0.80)
+            )
+            boxes.append(("fallback_qr", qr_box))
                 
         elif doc_type == "passport":
             photo_box = (

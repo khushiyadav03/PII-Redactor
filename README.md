@@ -35,7 +35,7 @@ DOCX
               Final redacted.docx
 ```
 
-Both the CLI and (optional) FastAPI wrapper call the same `app.pipeline.process_document()` — no duplicated logic.
+The CLI calls `app.pipeline.process_document()` — a single, unified orchestration pipeline.
 
 ## 3. Supported PII types
 
@@ -169,7 +169,7 @@ pii-redactor/
 │   └── evaluation/
 │       ├── metrics.py              # precision/recall/F1
 │       └── evaluator.py            # synthetic labeled test set + runner
-├── tests/                          # 24 pytest tests (unit + regression)
+├── tests/                          # 55 pytest tests (unit + regression + visual ROI tests)
 ├── samples/                        # input sample (Red_Herring_Prospectus.docx)
 ├── outputs/                        # redacted.docx goes here
 ├── reports/evaluation_report.md
