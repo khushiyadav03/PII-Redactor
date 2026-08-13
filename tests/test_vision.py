@@ -65,12 +65,13 @@ def test_image_redaction_masks_face_and_id_number():
     assert "NBWPS1951N" not in text_after
 
 
-def test_corrupted_image_bytes_does_not_crash():
-    """Hinglish: FAILURE-HANDLING GUARD - invalid image bytes crash nahi karni chahiye."""
+def test_corrupted_image_bytes_raises_value_error():
+    """Hinglish: FAILURE-HANDLING GUARD - invalid image bytes should raise ValueError to prevent leaks."""
+    import pytest
     garbage = b"not a real image file"
-    new_bytes, report = redact_image_bytes(garbage, RedactionPolicy())
-    assert report.modified is False
-    assert new_bytes == garbage
+    with pytest.raises(ValueError) as excinfo:
+        redact_image_bytes(garbage, RedactionPolicy())
+    assert "Image could not be decoded" in str(excinfo.value)
 
 
 def test_aadhaar_card_classified_and_number_masked():
@@ -363,8 +364,9 @@ def test_pan_card_signature_redacted_real_fixture():
     redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     
     # 1. Verify that the signature fallback ROI is blacked out
-    # Fallback signature box was computed as (416, 379, 658, 473)
-    sig_roi_redacted = redacted_img[380:460, 420:650]
+    # Fallback signature box is computed based on x1_rel=0.40, x2_rel=0.85, y1_rel=0.70, y2_rel=0.95
+    # This falls within redacted_img[380:460, 420:600]
+    sig_roi_redacted = redacted_img[380:460, 420:600]
     assert np.all(sig_roi_redacted == 0)
     
     # 2. Verify that control region (Header text) is unchanged
@@ -388,19 +390,95 @@ def test_aadhaar_card_qr_fallback_redacted_real_fixture():
     redacted_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     
     # 1. Verify that the Aadhaar QR code fallback ROI is blacked out
-    # Fallback QR box is computed as (470, 116, 666, 362)
-    qr_roi_redacted = redacted_img[150:350, 490:650]
+    # Fallback QR box is computed based on x1_rel=0.55, x2_rel=0.90, y1_rel=0.15, y2_rel=0.80
+    # Checking region [150:350, 500:650] which is safely within the fallback QR box
+    qr_roi_redacted = redacted_img[150:350, 500:650]
     assert np.all(qr_roi_redacted == 0)
     
-    # 2. Verify that the Aadhaar portrait photo (detected face box) is blacked out
-    # Face box was detected as (292, 198, 358, 264)
+    # 2. Verify that the actual portrait photo region on the LEFT side of the card is completely blacked out
+    # The actual photo box covers x: 173 to 307, y: 123 to 421.
+    # We check region [150:350, 180:300]
+    assert np.all(redacted_img[150:350, 180:300] == 0)
+    
+    # 3. Verify that the false-positive face box detected by Haar cascade is also blacked out
+    # Face box was at (292, 198, 358, 264)
     photo_roi_redacted = redacted_img[198:264, 292:358]
     assert np.all(photo_roi_redacted == 0)
     
-    # 3. Verify that control region (Name text area) is unchanged
-    control_orig = original_img[180:220, 50:200]
-    control_redacted = redacted_img[180:220, 50:200]
+    # 4. Verify that control region (Header text "Government of India") is completely unchanged
+    # Government of India: y from 60 to 100, x from 340 to 500
+    control_orig = original_img[60:100, 340:500]
+    control_redacted = redacted_img[60:100, 340:500]
     assert np.array_equal(control_orig, control_redacted)
+
+
+def test_aadhaar_classification_robustness():
+    from app.vision.ocr import OcrWord
+    from app.vision.id_detector import classify_id_document
+
+    # 1. Clean Aadhaar text
+    words_clean = [
+        OcrWord(text="GOVERNMENT", left=50, top=50, width=50, height=15, confidence=95.0),
+        OcrWord(text="OF", left=110, top=50, width=20, height=15, confidence=95.0),
+        OcrWord(text="INDIA", left=140, top=50, width=40, height=15, confidence=95.0),
+        OcrWord(text="Unique", left=50, top=80, width=40, height=15, confidence=95.0),
+        OcrWord(text="Identification", left=100, top=80, width=80, height=15, confidence=95.0),
+        OcrWord(text="Authority", left=190, top=80, width=50, height=15, confidence=95.0),
+        OcrWord(text="2943", left=50, top=120, width=30, height=15, confidence=95.0),
+        OcrWord(text="6593", left=90, top=120, width=30, height=15, confidence=95.0),
+        OcrWord(text="3461", left=130, top=120, width=30, height=15, confidence=95.0),
+    ]
+    res_clean = classify_id_document(words_clean)
+    assert res_clean.doc_type == "aadhaar"
+    assert res_clean.confidence == "high"
+
+    # 2. OCR-noisy Aadhaar text
+    words_noisy = [
+        OcrWord(text="Goverment", left=50, top=50, width=50, height=15, confidence=80.0),
+        # 'of mdia' with typo
+        OcrWord(text="of", left=110, top=50, width=20, height=15, confidence=80.0),
+        OcrWord(text="mdia", left=140, top=50, width=40, height=15, confidence=80.0),
+        # 'urique identification authonty' with typo
+        OcrWord(text="Urique", left=50, top=80, width=40, height=15, confidence=80.0),
+        OcrWord(text="Identification", left=100, top=80, width=80, height=15, confidence=80.0),
+        OcrWord(text="Authonty", left=190, top=80, width=50, height=15, confidence=80.0),
+        OcrWord(text="2943", left=50, top=120, width=30, height=15, confidence=95.0),
+        OcrWord(text="6593", left=90, top=120, width=30, height=15, confidence=95.0),
+        OcrWord(text="3461", left=130, top=120, width=30, height=15, confidence=95.0),
+    ]
+    res_noisy = classify_id_document(words_noisy)
+    assert res_noisy.doc_type == "aadhaar"
+    assert res_noisy.confidence == "high"
+
+    # 3. Random 12-digit number
+    words_num = [
+        OcrWord(text="1234", left=50, top=120, width=30, height=15, confidence=95.0),
+        OcrWord(text="5678", left=90, top=120, width=30, height=15, confidence=95.0),
+        OcrWord(text="9012", left=130, top=120, width=30, height=15, confidence=95.0),
+    ]
+    assert classify_id_document(words_num).doc_type == "unknown"
+
+    # 4. Singleton Aadhaar keyword
+    words_single = [
+        OcrWord(text="Aadhaar", left=50, top=50, width=60, height=15, confidence=95.0),
+    ]
+    assert classify_id_document(words_single).doc_type == "unknown"
+
+    # 5. Ordinary body text containing Aadhaar number
+    words_ordinary = [
+        OcrWord(text="This", left=50, top=50, width=30, height=15, confidence=95.0),
+        OcrWord(text="agreement", left=90, top=50, width=50, height=15, confidence=95.0),
+        OcrWord(text="is", left=150, top=50, width=15, height=15, confidence=95.0),
+        OcrWord(text="signed", left=170, top=50, width=40, height=15, confidence=95.0),
+        OcrWord(text="on", left=220, top=50, width=15, height=15, confidence=95.0),
+        OcrWord(text="12/12/2020", left=240, top=50, width=60, height=15, confidence=95.0),
+        OcrWord(text="Reference", left=50, top=80, width=50, height=15, confidence=95.0),
+        OcrWord(text="is", left=110, top=80, width=15, height=15, confidence=95.0),
+        OcrWord(text="2943", left=130, top=80, width=30, height=15, confidence=95.0),
+        OcrWord(text="6593", left=170, top=80, width=30, height=15, confidence=95.0),
+        OcrWord(text="3461", left=210, top=80, width=30, height=15, confidence=95.0),
+    ]
+    assert classify_id_document(words_ordinary).doc_type == "unknown"
 
 
 def test_generic_image_pii_redaction():

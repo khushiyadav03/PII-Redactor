@@ -37,3 +37,19 @@ def test_no_temp_files_left_behind():
     temp_path = OUT_DOC.replace(".docx", ".text_only.tmp.docx")
     assert not os.path.exists(temp_path)
     os.remove(OUT_DOC)
+
+
+def test_fail_closed_on_corrupt_image():
+    """Hinglish: FAILURE-HANDLING GUARD - image corrupt hone par processing fail honi chahiye."""
+    from unittest.mock import patch
+    import pytest
+
+    with patch("app.pipeline.extract_images") as mock_extract:
+        mock_extract.return_value = [("word/media/corrupt_image.png", b"invalid image bytes")]
+        with pytest.raises(ValueError) as exc:
+            process_document(REAL_DOC, OUT_DOC)
+        assert "Image could not be decoded" in str(exc.value)
+
+    # Ensure no output document was saved
+    assert not os.path.exists(OUT_DOC)
+

@@ -169,7 +169,7 @@ pii-redactor/
 │   └── evaluation/
 │       ├── metrics.py              # precision/recall/F1
 │       └── evaluator.py            # synthetic labeled test set + runner
-├── tests/                          # 55 pytest tests (unit + regression + visual ROI tests)
+├── tests/                          # 63 pytest tests (unit + regression + visual ROI + API + fail-closed tests)
 ├── samples/                        # input sample (Red_Herring_Prospectus.docx)
 ├── outputs/                        # redacted.docx goes here
 ├── reports/evaluation_report.md

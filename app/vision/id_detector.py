@@ -310,7 +310,7 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
                 card_min_x + int(card_w * 0.02),
                 card_min_y + int(front_h * 0.12),
                 card_min_x + int(card_w * 0.28),
-                card_min_y + int(front_h * 0.48)
+                card_min_y + int(front_h * 0.75)
             )
             sig_box = (
                 card_min_x + int(card_w * 0.40),
@@ -325,10 +325,10 @@ def find_id_field_boxes(words: List[OcrWord], doc_type: str = "unknown") -> List
             has_address = any("address" in w.text.lower() or "पता" in w.text.lower() for w in words)
             if not has_address or card_h > 600:
                 photo_box = (
-                    card_min_x + int(card_w * 0.05),
+                    card_min_x + int(card_w * 0.02),
                     card_min_y + int(front_h * 0.15),
-                    card_min_x + int(card_w * 0.24),
-                    card_min_y + int(front_h * 0.85)
+                    card_min_x + int(card_w * 0.28),
+                    card_min_y + int(front_h * 0.90)
                 )
                 boxes.append(("fallback_photo", photo_box))
             
