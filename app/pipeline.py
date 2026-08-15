@@ -1,25 +1,12 @@
-"""
-Ye pipeline ka central orchestrator hai. CLI (run_redaction.py)
-aur FastAPI (agar banaya) dono isi `process_document()` function ko call
-karenge - logic kahin duplicate nahi hoga (assignment requirement #23).
-
-PHASE STATUS:
-  Phase 1: DOCX read/write roundtrip.                             DONE
-  Phase 2/3: text regex + NER + context-rule redaction.           DONE
-  Phase 4/5: image OCR/face/ID/QR pixel-level redaction.          DONE
-  Phase 6: metadata cleanup.                                      DONE (core props only)
-"""
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-# Hinglish: Long documents mein sirf spinner se user ko pata nahi chalta ki
-# processing actually chal rahi hai. Isliye backend ki real processing state
-# ko UI mein expose karte hain — optional callback, koi extra infra nahi.
-ProgressCallback = Callable[[dict], None]
-
 from app.config import RedactionPolicy
-from app.document.image_extractor import extract_images, write_docx_with_replaced_images
+from app.document.image_extractor import (
+    extract_images,
+    write_docx_with_replaced_images,
+)
 from app.document.metadata import clean_core_metadata
 from app.document.reader import load_document
 from app.synthetic.generator import ConsistentReplacer
@@ -27,21 +14,40 @@ from app.text.redactor import redact_logical_paragraphs
 from app.vision.image_redactor import redact_image_bytes, ImageRedactionReport
 
 
+# Progress callback ek function hota hai jo processing ka current status
+# UI ya kisi aur caller ko bata sakta hai.
+ProgressCallback = Callable[[dict], None]
+
+
 @dataclass
 class PipelineResult:
+    # Pipeline complete hone ke baad important summary yahan store hogi.
     input_path: str
     output_path: str
     paragraphs_scanned: int
     tables_found: int
     images_found: int
-    text_redactions_applied: int = 0  # Hinglish: counts only, kabhi bhi raw PII value nahi
+
+    # Text aur image redaction ke counts.
+    text_redactions_applied: int = 0
     images_modified: int = 0
-    image_redaction_reports: List[Tuple[str, ImageRedactionReport]] = field(default_factory=list)
+
+    # Har processed image ki detailed report.
+    image_redaction_reports: List[
+        Tuple[str, ImageRedactionReport]
+    ] = field(default_factory=list)
 
 
-def _emit_progress(callback: Optional[ProgressCallback], stage: str, **data) -> None:
+def _emit_progress(
+    callback: Optional[ProgressCallback],
+    stage: str,
+    **data
+) -> None:
+    # Agar callback nahi diya gaya toh kuch nahi karna.
     if callback is None:
         return
+
+    # Current processing stage aur extra information callback ko bhejte hain.
     callback({"stage": stage, **data})
 
 
@@ -51,22 +57,32 @@ def process_document(
     policy: RedactionPolicy = None,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> PipelineResult:
-    """
-    Full pipeline (text + image):
-      1. Text: document load -> detect+redact PII (consistent replacements)
-         -> metadata clean -> temp save
-      2. Images: temp docx ke images extract karo -> har image OCR/face/
-         ID/QR redact karo -> naya docx banao jisme images replaced hain
-         (irreversible pixel-level redaction)
-    """
-    if not Path(input_path).exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
 
+    """
+    Pura document redaction pipeline.
+
+    Text PII aur images dono process hote hain.
+    """
+
+    # Sabse pehle check karo ki input file actually exist karti hai ya nahi.
+    if not Path(input_path).exists():
+        raise FileNotFoundError(
+            f"Input file not found: {input_path}"
+        )
+
+    # Agar user ne policy nahi di, toh default policy use karo.
     policy = policy or RedactionPolicy()
+
+    # UI ko batao ki document load ho raha hai.
     _emit_progress(progress_callback, "loading_document")
+
+    # DOCX ko read karke document ka structured representation milta hai.
     content = load_document(input_path)
 
+    # Document ke saare paragraphs collect karo.
     paragraphs = content.all_paragraphs()
+
+    # Text analysis start hone ki information UI ko bhejo.
     _emit_progress(
         progress_callback,
         "analyzing_text",
@@ -74,53 +90,108 @@ def process_document(
         total=len(paragraphs),
     )
 
+    # Same PII ko document mein consistently replace karne ke liye
+    # ek replacer object create karte hain.
     replacer = ConsistentReplacer()
+
+    # Paragraphs mein PII detect karke redact karo.
     total_text_redactions = redact_logical_paragraphs(
-        paragraphs, replacer, policy, progress_callback=progress_callback
+        paragraphs,
+        replacer,
+        policy,
+        progress_callback=progress_callback,
     )
 
+    # Text redaction ke baad document metadata clean karo.
     _emit_progress(progress_callback, "cleaning_metadata")
     clean_core_metadata(content.document)
 
+    # Output folder exist nahi karta toh automatically create karo.
     output_path_obj = Path(output_path)
-    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+    output_path_obj.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    # Hinglish: Step 1 output ek temp file mein save karte hain (text-redacted,
-    # images abhi original hain) - phir isi file ke images replace karke
-    # final output banate hain.
-    temp_text_redacted_path = str(output_path_obj.with_suffix(".text_only.tmp.docx"))
+    # Pehle ek temporary DOCX save karenge.
+    # Is stage par text redacted hai, lekin images abhi original hain.
+    temp_text_redacted_path = str(
+        output_path_obj.with_suffix(".text_only.tmp.docx")
+    )
+
     _emit_progress(progress_callback, "saving_document")
+
+    # Text-redacted document ko temporary file mein save karo.
     content.document.save(temp_text_redacted_path)
 
     try:
+        # Temporary DOCX ke andar se saari images extract karo.
         images = extract_images(temp_text_redacted_path)
+
+        # Sirf modified images ko store karne ke liye dictionary.
         image_replacements = {}
-        reports: List[Tuple[str, ImageRedactionReport]] = []
+
+        # Har image ki processing report yahan store hogi.
+        reports: List[
+            Tuple[str, ImageRedactionReport]
+        ] = []
+
+        # Kitni images actually modify hui hain.
         images_modified_count = 0
+
+        # Total images ki count.
         total_images = len(images)
 
-        for image_index, (zip_name, image_bytes) in enumerate(images, start=1):
+        # Ek-ek image ko process karo.
+        for image_index, (zip_name, image_bytes) in enumerate(
+            images,
+            start=1,
+        ):
+            # UI ko batao ki kaunsi image process ho rahi hai.
             _emit_progress(
                 progress_callback,
                 "processing_images",
                 current=image_index,
                 total=total_images,
             )
-            # Hinglish: Original image format nikal kar pass karte hain (e.g. .jpeg)
+
+            # Image ka original extension nikalo.
+            # Example: .jpg, .jpeg, .png
             img_ext = Path(zip_name).suffix.lower()
-            new_bytes, report = redact_image_bytes(image_bytes, policy, img_ext)
+
+            # Image ke andar PII detect karke pixel-level redaction karo.
+            new_bytes, report = redact_image_bytes(
+                image_bytes,
+                policy,
+                img_ext,
+            )
+
+            # Image ki processing report save karo.
             reports.append((zip_name, report))
+
+            # Agar image mein actual redaction hui hai,
+            # toh new image bytes ko replacement dictionary mein rakho.
             if report.modified:
                 image_replacements[zip_name] = new_bytes
                 images_modified_count += 1
 
+        # Text aur processed images ko combine karke final DOCX banao.
         _emit_progress(progress_callback, "finalizing")
-        write_docx_with_replaced_images(temp_text_redacted_path, output_path, image_replacements)
-    finally:
-        # Hinglish: temp file cleanup - permanently store nahi karte (privacy requirement #28)
-        # Hinglish: Exception aane par bhi clean-up call guarantee hai
-        Path(temp_text_redacted_path).unlink(missing_ok=True)
 
+        write_docx_with_replaced_images(
+            temp_text_redacted_path,
+            output_path,
+            image_replacements,
+        )
+
+    finally:
+        # Temporary file ko hamesha delete karo.
+        # finally ki wajah se error aane par bhi cleanup hoga.
+        Path(temp_text_redacted_path).unlink(
+            missing_ok=True
+        )
+
+    # Puri processing ka result caller ko return karo.
     return PipelineResult(
         input_path=input_path,
         output_path=output_path,
